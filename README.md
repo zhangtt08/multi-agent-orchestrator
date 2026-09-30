@@ -1,6 +1,6 @@
 # Multi-Agent Orchestrator (MAO)
 
-**English** | [简体中文](./README.md)
+**English** | [简体中文](./README.zh-CN.md)
 
 Coding agents burn quota on half-finished runs, and "trust me, it's done" is not a delivery. MAO wraps real coding CLI agents in a verifiable, resumable execution framework: results are judged by evidence the framework collects itself (run the tests, take the diff — never the agent's self-report), and a killed process resumes from the last completed stage instead of starting over.
 
