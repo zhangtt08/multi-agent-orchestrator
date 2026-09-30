@@ -1,0 +1,91 @@
+# ===========================================================================
+# 阶段三：真实 Harness Profile
+# ===========================================================================
+#
+# 这份文件是阶段三的核心证明物：
+#   **接入一个真实订阅制 Coding Agent，只新增配置，不改任何代码。**
+#
+# 所有参数均来自本机 `claude --help` 实测（详见 docs/REAL_HARNESS_NOTES.md §二），
+# 没有一项是猜测填入的。
+#
+# ┌─ 与 config/{agents,harness}.yaml 的关系 ─────────────────────────────┐
+# │ base_cli 仍然复用 config/harness.yaml 的思路：                      │
+# │   - 差异落在 YAML，不落在代码                                        │
+# │   - GenericCLIAdapter 一个就够，不需要 ClaudeAdapter                │
+# └──────────────────────────────────────────────────────────────────────┘
+#
+# 用法：
+#   1) 复制本目录到你想跑真实 Agent 的场景
+#   2) 确保本机 claude 已登录（~/.claude/.credentials.json 存在）
+#   3) python main.py --providers --config-dir config_p3   # 先看命令构造
+#   4) python main.py --doctor    --config-dir config_p3   # 再看鉴权状态
+#   5) pytest -m real_harness                              # 最后跑真实 smoke
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# 真实 Harness 的公共底座
+# ---------------------------------------------------------------------------
+base_real_cli:
+  description: "Common defaults for real subscription-based CLI agents."
+  # 绝对路径。理由：claude 装在 managed-node 目录下，不在用户本机 PATH，
+  # 依赖 PATH 解析会在别的终端里静默失败。
+  command: "C:/Users/EDY/.workbuddy/binaries/node/versions/22.22.2-3/node_modules/@anthropic-ai/claude-code/bin/claude.exe"
+  prompt_mode: stdin
+  working_directory_mode: workspace
+  output_mode: stdout
+  timeout_seconds: 600
+  allowed_exit_codes: [0]
+  supports_cli: true
+  supports_json_output: true
+  supports_file_write: true
+  supports_shell: true
+  supports_git: true
+  supports_streaming: false
+  # §十六：开关存在（--resume/--session-id）但本机无法验证真实续接效果
+  # （账号不可用，产生不了可续接的成功会话）。按规范保持 false，不伪造。
+  resume_strategy: none
+  environment: {}
+  redacted_env_keys:
+    - API_KEY
+    - AUTH_TOKEN
+    - TOKEN
+    - COOKIE
+    - PASSWORD
+    - SECRET
+
+# ---------------------------------------------------------------------------
+# 真实 Executor —— 阶段三唯一接入的真实角色
+# ---------------------------------------------------------------------------
+# ⚠️ 这三个参数全部是**实测**结论，不是照抄文档（见 docs/REAL_HARNESS_NOTES.md）：
+#
+#   -p, --print
+#       非交互：打印结果后退出，不会挂住等人输入。
+#
+#   --permission-mode acceptEdits
+#       ★ 关键修正。实测结果：
+#         dontAsk   -> Edit / Write **被拒绝**（permission_denials 里能看到），
+#                      Agent 只会诚实报告"被拦住了"，文件一个字节都不会改。
+#         acceptEdits -> Edit / Write 放行，文件真实落盘。
+#       "dontAsk" 的字面意思是"别问我"，语义上就是"需要问的一律拒绝"，
+#       它**不是**无人值守自动批准。这一点极易搞错，必须写死在这里。
+#
+#   刻意**不加** --output-format json：
+#       Claude 的 json 模式输出的是一个信封
+#       {"type":"result","result":"<正文>","session_id":...}，
+#       而框架的 JsonResponseExtractor 只认 stdout 整体是契约 JSON
+#       （whole / fenced / last_object 三种模式都不做信封解包）。
+#       用默认文本输出，Agent 的 JSON 契约就是 stdout 本身，
+#       直接命中 whole 模式。
+#
+#   Shell 访问（Bash）在 acceptEdits 下仍被拒绝 —— 这不是缺陷：
+#   框架本来就要求**自己**跑 pytest 取证（§7），不依赖 Agent 自报。
+# ---------------------------------------------------------------------------
+real_executor:
+  extends: base_real_cli
+  description: "Real Claude Code CLI as Executor (non-interactive, edit-allowed)."
+  extra_args:
+    - "-p"
+    - "--permission-mode"
+    - "acceptEdits"
+  timeout_seconds: 600
+  allowed_exit_codes: [0]

@@ -1,0 +1,35 @@
+# ===========================================================================
+# 阶段四 settings
+# ===========================================================================
+
+# §19 调用预算：每轮至少 2 个付费/额度调用（Claude 执行 + Codex 复审）。
+# 多轮 demo 需要 FAIL -> 返工 -> PASS，所以要留够轮数。
+max_rounds: 3
+
+# 每个 round 最多 3 个角色调用（supervisor/executor/reviewer），
+# 再给格式修复 + 返工留余量。显式写死，避免"跑到一半被闸掐掉"。
+max_agent_calls_per_task: 12
+
+# 只记录可观测事实（次数/耗时/回合），**不估算金额**。
+# 要金额请看各家自己的账单 —— 中转/订阅计价不透明，猜比不猜更危险。
+track_usage: true
+
+runtime_dir: runtime_p4
+workspace_dir: workspaces
+default_timeout_seconds: 600
+stop_on_execution_error: true
+verbose: true
+write_pretty_json: true
+
+dry_run: false
+run_preflight: true
+max_response_repair_attempts: 1
+verification_timeout_seconds: 300
+
+redacted_env_keys:
+  - API_KEY
+  - AUTH_TOKEN
+  - TOKEN
+  - COOKIE
+  - PASSWORD
+  - SECRET

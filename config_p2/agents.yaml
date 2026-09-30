@@ -1,0 +1,32 @@
+# 第二阶段演示配置：三个角色全部走真实 CLI（fake_cli_agent.py）。
+#
+# 这份配置的意义：证明"不写任何新 Adapter、不改一行核心代码"就能把
+# Mock 三件套换成"通过真实子进程调用的 CLI Agent"。
+#
+# 用法：
+#   python main.py --config-dir config_p2
+#
+# 注意 harness_profile 的写法：
+#   - 字符串 -> 该角色用这份 Profile
+#   - 也可以只写一次，让三个角色共用（见下方 reviewer 的示例）
+
+supervisor:
+  provider: generic_cli
+  transport: subprocess
+  harness_profile: fake_supervisor
+  transport_options:
+    dry_run: false
+
+executor:
+  provider: generic_cli
+  transport: subprocess
+  harness_profile: fake_executor_a
+  transport_options:
+    dry_run: false
+
+reviewer:
+  provider: generic_cli
+  transport: subprocess
+  harness_profile: fake_reviewer
+  transport_options:
+    dry_run: false

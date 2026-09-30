@@ -1,0 +1,21 @@
+# ---------------------------------------------------------------------------
+# Multi-Agent Orchestrator —— 核心运行时依赖
+#
+# 装完这一份就能：加载配置、跑 Mock 闭环、提交队列任务、调度、
+# GIT_WORKTREE 隔离、durable checkpoint 与断点续跑、词法（FTS5）记忆检索。
+#
+# 刻意不含 numpy / faiss：那是**可选**的进程内向量索引（见
+# requirements-semantic.txt），不含它们时所有模块照样能 import，
+# 记忆检索自动退化为词法模式。这一条是实测的，不是推测。
+#
+# 安装（Windows PowerShell）：
+#     python -m venv .venv
+#     .venv\Scripts\Activate.ps1
+#     pip install -r requirements.txt
+# ---------------------------------------------------------------------------
+
+# 配置模型与所有运行时契约的校验层；mao/ 里唯一的第三方硬导入。
+pydantic>=2.7,<3
+
+# settings.yaml / agents.yaml / harness.yaml 的解析。
+PyYAML>=6,<7

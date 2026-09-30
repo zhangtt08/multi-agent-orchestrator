@@ -1,0 +1,32 @@
+# ===========================================================================
+# 阶段三：三角色绑定 —— 真实 Executor 夹在 Mock Supervisor / Mock Reviewer 之间
+# ===========================================================================
+#
+# §阶段三拓扑（刻意如此）：
+#
+#   Mock Supervisor  ->  Real Executor  ->  Shared Workspace
+#        ->  Framework Evidence  ->  Mock Reviewer  ->  PASS / FAIL
+#
+# 为什么不同时接真实 Supervisor + Reviewer：
+#   两个真实 Agent 之间的"自由对话"会把信号稀释掉 —— 当结果不对时，
+#   你分不清是执行层的问题还是评审层的问题。一次只换一个变量，
+#   才能把"框架确实驱动了真实 Agent"这件事证明干净。
+#
+# 而 Mock Reviewer 反而是优势：它按 acceptance_criteria 机械验收，
+# 不受 Agent 自述影响，正好印证 §七/§十 的"Evidence 压过 Self Report"。
+# ===========================================================================
+
+supervisor:
+  provider: mock_supervisor
+
+executor:
+  provider: generic_cli
+  transport: subprocess
+  harness_profile: real_executor        # -> config_p3/harness.yaml
+  # 注：早期版本必须在这里写 transport_options.dry_run: false 才能真跑，
+  #     因为 AgentRegistry 不把 settings.dry_run 传给 Transport（§0 静默 bug）。
+  #     该 bug 已在阶段四修复 —— settings.yaml 的 dry_run 现在会自动生效。
+  #     这里刻意不再写覆盖，用来验证修复真的起作用（回归测试也断言这一点）。
+
+reviewer:
+  provider: mock_supervisor

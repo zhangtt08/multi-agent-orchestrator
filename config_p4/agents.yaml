@@ -1,0 +1,38 @@
+# ===========================================================================
+# 阶段四：双真实 Harness 角色绑定
+# ===========================================================================
+#
+#   supervisor -> mock_supervisor         （刻意保持 Mock，§14）
+#   executor   -> Claude Code             （真实，可写工作区）
+#   reviewer   -> Codex CLI               （真实，只读）
+#
+# 为什么 Supervisor 保持 Mock（§14）：
+#   如果 Plan 错、Executor 错、Reviewer 错同时发生，根本分不清问题出在哪一层。
+#   阶段四的目标是"先把两个真实 Harness 之间的闭环站稳"，不是铺开更多 Agent。
+#
+# §21 Provider Swap：
+#   要换回 Mock Reviewer，只需把 reviewer 那段改成：
+#       reviewer:
+#         provider: mock_supervisor
+#   然后 runner 会自动检测"reviewer 不是真实 Harness"，跳过
+#   "必须证明 Reviewer 真是 Codex" 的那组断言。
+#   核心代码零修改。
+# ===========================================================================
+
+supervisor:
+  provider: mock_supervisor
+  # 场景来自 Task.context（criteria / verification_commands / executor_prompt），
+  # 不写死在这里 —— 同一个 Mock Supervisor 服务任意任务。
+  script: default
+
+executor:
+  provider: generic_cli
+  transport: subprocess
+  harness_profile: real_executor
+  # §0 修复后，settings.dry_run 会自动传到 Transport，无需在此覆盖。
+
+reviewer:
+  provider: generic_cli
+  transport: subprocess
+  harness_profile: codex_reviewer
+  # 同样不写 dry_run 覆盖 —— 由 settings.yaml 统一决定。

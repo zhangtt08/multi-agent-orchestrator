@@ -1,0 +1,99 @@
+# ===========================================================================
+# 阶段八 settings：Multi-Task Queue + Runtime Scheduler（§39）
+# ===========================================================================
+# 业务运行参数 = 阶段五/六/七 已验证形态（runtime_dir 换到 p8），
+# 新增 scheduler 段。Memory 与 Outcome Feedback 沿用 Phase 7 口径
+# （./memory/memory.db 与历史阶段共享 —— §43 跨任务 Memory 正是本阶段 Demo）。
+
+max_plan_repair_attempts: 1
+repair_strategy: supervisor_replan
+
+max_rounds: 3
+max_agent_calls_per_task: 15
+
+track_usage: true
+
+runtime_dir: runtime_p8
+workspace_dir: workspaces
+default_timeout_seconds: 900
+stop_on_execution_error: true
+verbose: true
+write_pretty_json: true
+
+dry_run: false
+run_preflight: true
+max_response_repair_attempts: 1
+verification_timeout_seconds: 300
+
+redacted_env_keys:
+  - API_KEY
+  - AUTH_TOKEN
+  - TOKEN
+  - COOKIE
+  - PASSWORD
+  - SECRET
+
+# ===========================================================================
+# 阶段八：Multi-Task Queue + Runtime Scheduler（§39）
+# ===========================================================================
+scheduler:
+  enabled: true                 # §72：其他 config 保持 false = Phase 1-7 行为
+  db_path: ./runtime_scheduler/queue.db
+  max_concurrent_tasks: 1       # §42：可以提交多个，一次只执行一个
+  default_priority: NORMAL      # §9：LOW / NORMAL / HIGH
+  default_max_attempts: 3       # §23：达到后 FAILED，不能永远重试
+  heartbeat_seconds: 30         # §16
+  lease_timeout_seconds: 120    # §13
+  poll_seconds: 2.0
+  attempts_root: runtime_p8     # 每 attempt 独立 runtime 子目录（§24）
+  aging_enabled: true           # §10 starvation 防护
+  aging_interval_minutes: 30
+  aging_step: 1
+  max_active_real_harness_calls: 3   # §41 全局预算
+  retry:                        # §22 指数退避
+    base_delay_seconds: 30
+    max_delay_seconds: 600
+    jitter_seconds: 0           # 确定性（测试友好，§57）
+
+# ===========================================================================
+# 阶段六/七：Long-Term Memory + Outcome Feedback（与 config_p7 同口径）
+# ===========================================================================
+memory:
+  enabled: true
+  backend: sqlite
+  path: ./memory/memory.db
+  min_confidence: MEDIUM
+  auto_extract: true
+  required: false
+  project_id: multi-agent-orchestrator
+  outcome_feedback:
+    enabled: true
+    auto_evaluate: true
+    minimum_samples: 3
+    outcome_weight: 0.05
+    role_aware: true
+    required: false
+  semantic:
+    enabled: true
+    provider: worker
+    vector_backend: faiss
+    model_path: ${MEMORY_EMBEDDING_MODEL_PATH}
+    worker_interpreter: ${MEMORY_EMBEDDING_INTERPRETER}
+    hf_home: ${MEMORY_HF_HOME}
+    hf_endpoint: https://hf-mirror.com
+    hf_extra_env:
+      HF_HUB_DISABLE_XET: "1"
+    lazy_load: true
+    batch_size: 16
+    minimum_vector_score: 0.3
+    index_dir: ./memory/vector_index
+  retrieval:
+    supervisor_top_k: 5
+    executor_top_k: 3
+    reviewer_top_k: 3
+    mode: hybrid
+    hybrid:
+      vector_weight: 0.55
+      lexical_weight: 0.25
+      scope_weight: 0.15
+      confidence_weight: 0.05

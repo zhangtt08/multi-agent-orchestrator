@@ -1,0 +1,25 @@
+# ---------------------------------------------------------------------------
+# 可选：Embedding worker 的独立环境（BGE-M3 语义检索）
+#
+# 关键：这一份**不要装进主 venv**。它是一个独立解释器环境，由
+# MEMORY_EMBEDDING_INTERPRETER 指向，通过 JSON-lines 协议与主进程通信。
+# 理由是实测出来的：torch 与主进程的 numpy/faiss 组合在同一台 Windows 上
+# 曾互相踩坏（见 README「Known Windows compatibility」与下方 torch 钉版说明）。
+#
+#     python -m venv .venv-ml
+#     .venv-ml\Scripts\Activate.ps1
+#     pip install -r requirements-ml.txt
+#     # 再取模型（约 2.2GB，需自行确认磁盘与网络）：
+#     python tools/setup_embeddings.py
+#
+# 版本钉死，不要"顺手升级"：
+#   torch 2.6.0+cpu 是在已验证环境里唯一确认能初始化的版本；
+#   更新的 torch 曾出现 c10.dll WinError 1114（该 DLL 由 torch 自带的
+#   libtorch 包提供，所以症状表现为"缺 DLL"，实为版本不兼容）。
+#   这只说明**已验证环境**上的事实，不代表所有 Windows 必然失败。
+# ---------------------------------------------------------------------------
+
+--extra-index-url https://download.pytorch.org/whl/cpu
+
+torch==2.6.0+cpu
+sentence-transformers==6.1.0

@@ -1,0 +1,14 @@
+# 角色 -> Provider 绑定。换 Agent 只改这里，不改任何 Python 代码。
+#
+# 这三个名字都是框架自带的 Mock Adapter（mao/agents/ 下注册），它们按内置剧本
+# 产出合法的 Plan / Execution / Review 结构，因此不需要外部 CLI、不消耗配额。
+# 要看真实 Harness 怎么绑，读 config/agents.yaml 与 config/harness.yaml。
+
+supervisor:
+  provider: mock_supervisor
+
+executor:
+  provider: mock_executor_a
+
+reviewer:
+  provider: mock_supervisor

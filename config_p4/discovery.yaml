@@ -1,0 +1,30 @@
+# ===========================================================================
+# 阶段四：Discovery 声明（§2 / §18）
+# ===========================================================================
+#
+# 为什么需要这个文件：
+#   `--discover` 默认只扫 PATH。但真实 Harness 未必在 PATH 里 ——
+#   本机的 Codex CLI 就装在
+#       %LOCALAPPDATA%\OpenAI\Codex\bin\<hash>\codex.exe
+#   `shutil.which("codex")` 永远找不到它，于是探测报 MISSING，
+#   而它其实完全可用。这个文件让"位置特殊的 CLI"也能被探测到。
+#
+# 路径写法（§18）：
+#   **不要**把 C:\Users\<某人>\... 这种绝对路径提交进仓库 ——
+#   换台机器就失效，而且泄漏了本机目录结构。
+#   这里用 ${CODEX_CLI_PATH}，运行时从环境变量展开。
+#
+# 本机设置方式（PowerShell，当前会话）：
+#   $env:CODEX_CLI_PATH = "C:\Users\<you>\AppData\Local\OpenAI\Codex\bin\<hash>\codex.exe"
+# 永久设置：
+#   [Environment]::SetEnvironmentVariable("CODEX_CLI_PATH", "<path>", "User")
+#
+# 未设置时的行为：占位符**原样保留**，探测报 MISSING。
+# 这样错误信息里会直接显示 "${CODEX_CLI_PATH}" —— 一眼看出缺哪个变量。
+# ===========================================================================
+
+extra_commands:
+  - name: codex_local
+    command: "${CODEX_CLI_PATH}"
+    version_args: ["--version"]
+    note: "Codex CLI installed outside PATH (declared in discovery config)"

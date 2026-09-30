@@ -1,0 +1,34 @@
+# ===========================================================================
+# 阶段三 settings —— 真实 Agent 的运行参数
+# ===========================================================================
+
+max_rounds: 5
+runtime_dir: runtime_p3
+workspace_dir: workspace_p3
+default_timeout_seconds: 600
+stop_on_execution_error: true
+verbose: true
+write_pretty_json: true
+
+# 第二阶段沿用
+dry_run: false
+run_preflight: true
+max_response_repair_attempts: 1
+verification_timeout_seconds: 300
+
+# ---- 阶段三新增（§二十一 / §二十二）----
+# 真实调用很贵。max_rounds 数的是"业务回合"，一个回合里可能发生多次
+# 真实调用（格式修复、返工重试），所以必须单独给调用次数上闸。
+#
+# 留空/注释掉 = 自动推导（max_rounds × 3 角色 + 2 余量）。
+# 真实场景建议**显式**给一个数，把成本兜住 —— 例如这里 3 轮 × 3 角色 + 余量。
+max_agent_calls_per_task: 12
+track_usage: true
+
+redacted_env_keys:
+  - API_KEY
+  - AUTH_TOKEN
+  - TOKEN
+  - COOKIE
+  - PASSWORD
+  - SECRET

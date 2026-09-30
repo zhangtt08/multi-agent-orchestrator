@@ -1,0 +1,38 @@
+# 角色 -> Provider 绑定。
+#
+# 这是切换 Agent 的唯一入口。改这里的 provider 名字，不需要动任何 Python 代码。
+# 当前全部使用 Mock，不接真实 Harness。
+
+supervisor:
+  provider: mock_supervisor
+
+executor:
+  provider: mock_executor_a
+
+# 第一阶段 Reviewer 由 Supervisor 适配器承担。
+# 架构上它是独立的角色绑定，将来换成独立 Adapter 时只改这一行。
+reviewer:
+  provider: mock_supervisor
+
+# ---------------------------------------------------------------------------
+# 演示用的替代配置（切换到真实 Harness 时长这样）：
+#
+#   supervisor:
+#     provider: claude_code
+#   executor:
+#     provider: codex
+#   reviewer:
+#     provider: claude_code
+#
+# 或者：
+#
+#   supervisor:
+#     provider: zcode
+#   executor:
+#     provider: cursor
+#   reviewer:
+#     provider: zcode
+#
+# 前提是这些名字已在 agents/ 中实现了对应 Adapter 并注册。
+# 未注册的 provider 会抛 AdapterNotFound，且错误信息里会列出当前可用项。
+# ---------------------------------------------------------------------------

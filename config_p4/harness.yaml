@@ -1,0 +1,126 @@
+# ===========================================================================
+# 阶段四：双真实 Harness 配置
+# ===========================================================================
+#
+# 拓扑（固定，不引入 Real Supervisor）：
+#
+#     Mock Supervisor
+#            ↓  Plan
+#     Claude Code  —— Real Executor（可写工作区）
+#            ↓
+#     Shared Workspace
+#            ↓
+#     Framework Evidence（git diff / pytest，框架自己跑）
+#            ↓
+#     Codex CLI  —— Real Reviewer（**只读**，不能写工作区）
+#            ↓
+#     PASS / FAIL
+#            ↓  FAIL -> next_prompt
+#     Claude Code 再次执行
+#
+# 本文件里的每个参数都是**本机实测**得到的（见 docs/REAL_HARNESS_NOTES.md 与
+# docs/history/PHASE4_REPORT.md），没有一项是照文档猜的。
+#
+# 关于 Codex 的存在性（§18）：
+#   它不在 PATH 里，路径走 ${CODEX_CLI_PATH} 环境变量展开 ——
+#   仓库配置里不出现任何用户绝对路径。
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# 共享底座：Claude 侧
+# ---------------------------------------------------------------------------
+# §18：两个 Provider 一视同仁 —— 本机绝对路径一律走环境变量占位，
+#       仓库配置里不出现 C:\Users\<某人>\...。
+#       本机的 claude 装在 managed-node 目录下（不在 PATH），所以必须显式指定。
+#       设置：$env:CLAUDE_CLI_PATH = "<...>\claude.exe"
+# ---------------------------------------------------------------------------
+base_real_cli:
+  description: "Shared defaults for the Claude Code executor."
+  command: "${CLAUDE_CLI_PATH}"
+  prompt_mode: stdin
+  working_directory_mode: workspace
+  output_mode: stdout
+  timeout_seconds: 600
+  allowed_exit_codes: [0]
+  supports_cli: true
+  supports_json_output: true
+  supports_file_write: true      # Executor 必须能写
+  supports_shell: true
+  supports_git: true
+  supports_streaming: false
+  resume_strategy: none
+  environment: {}
+  redacted_env_keys:
+    - API_KEY
+    - AUTH_TOKEN
+    - TOKEN
+    - COOKIE
+    - PASSWORD
+    - SECRET
+
+# ---------------------------------------------------------------------------
+# Real Executor —— Claude Code（实测参数，理由见 config_p3/harness.yaml 注释）
+#   -p                              非交互
+#   --permission-mode acceptEdits   实测唯一能真正落盘文件修改的模式
+#   刻意不用 --output-format json   信封与框架抽取器不兼容
+# ---------------------------------------------------------------------------
+real_executor:
+  extends: base_real_cli
+  description: "Real Claude Code CLI as Executor (non-interactive, edit-allowed)."
+  extra_args: ["-p", "--permission-mode", "acceptEdits"]
+
+# ---------------------------------------------------------------------------
+# 共享底座：Codex 侧
+# ---------------------------------------------------------------------------
+base_codex_cli:
+  description: "Shared defaults for the Codex CLI reviewer."
+  # §18：路径来自环境变量，仓库里不留用户绝对路径。
+  #      未设置时占位符原样保留，doctor/discover 会直接把 `${CODEX_CLI_PATH}`
+  #      打在错误信息里 —— 一眼看出缺哪个变量。
+  command: "${CODEX_CLI_PATH}"
+  prompt_mode: stdin
+  working_directory_mode: workspace
+  output_mode: stdout
+  timeout_seconds: 600
+  allowed_exit_codes: [0]
+  supports_cli: true
+  supports_json_output: true
+  # ★ Reviewer 必须只读。这几个 false 不是装饰：
+  #   - 能力闸门会校验角色门槛
+  #   - 框架还有独立的"调用前后工作区指纹比对"作为第二道防线
+  supports_file_write: false
+  supports_shell: false
+  supports_git: false
+  supports_streaming: false
+  resume_strategy: none
+  environment: {}
+  redacted_env_keys:
+    - API_KEY
+    - AUTH_TOKEN
+    - TOKEN
+    - COOKIE
+    - PASSWORD
+    - SECRET
+
+# ---------------------------------------------------------------------------
+# Real Reviewer —— Codex CLI（read-only）
+# ---------------------------------------------------------------------------
+# 实测依据（`codex exec --help` + 真跑）：
+#   exec                 非交互子命令
+#   -s read-only         沙箱策略：只读。Reviewer 不得写工作区
+#   --skip-git-repo-check 允许在非 git 目录运行（工作区可能是非 git 的）
+#   -                    提示词从 stdin 读（与 prompt_mode: stdin 对应）
+#
+# 实测输出形状（很重要）：
+#   stdout = **干净的最终回答**（banner 全部打在 stderr）
+#   -> 所以不需要 --json / JSONL 事件流，直接让模型输出 ReviewResult JSON，
+#      交给 JsonResponseExtractor 的 `whole` 模式即可。
+#      Framework Contract 才是 Agent 之间的协议，不是 provider 自己的事件 schema。
+#
+# 刻意**不**加 --dangerously-bypass-approvals-and-sandbox：
+#   Reviewer 不需要写权限，绕过沙箱纯属多此一举且危险。
+# ---------------------------------------------------------------------------
+codex_reviewer:
+  extends: base_codex_cli
+  description: "Real Codex CLI as Reviewer (read-only sandbox)."
+  extra_args: ["exec", "-s", "read-only", "--skip-git-repo-check", "-"]

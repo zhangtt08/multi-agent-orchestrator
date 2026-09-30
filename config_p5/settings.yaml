@@ -1,0 +1,39 @@
+# ===========================================================================
+# 阶段五 settings
+# ===========================================================================
+
+# §13 Plan 契约修复：Supervisor 第一次可能给出"语法对但不可执行"的 Plan。
+# 允许修一次（发回同一个 Supervisor），修不好就失败。
+max_plan_repair_attempts: 1
+
+# §15 返工路径（两种都保留，切换只改配置，core 无品牌判断）：
+#   supervisor_replan       FAIL -> Real Supervisor 看失败上下文后重新规划（默认）
+#   direct_reviewer_prompt  FAIL -> Reviewer 的 next_prompt 直接给 Executor
+#                            （阶段四能力，保留可配）
+repair_strategy: supervisor_replan
+
+# §22 多轮统计：Supervisor 2 次 + Executor 2 次 + Reviewer 2 次 = 6
+max_rounds: 3
+max_agent_calls_per_task: 15
+
+track_usage: true
+
+runtime_dir: runtime_p5
+workspace_dir: workspaces
+default_timeout_seconds: 900
+stop_on_execution_error: true
+verbose: true
+write_pretty_json: true
+
+dry_run: false
+run_preflight: true
+max_response_repair_attempts: 1
+verification_timeout_seconds: 300
+
+redacted_env_keys:
+  - API_KEY
+  - AUTH_TOKEN
+  - TOKEN
+  - COOKIE
+  - PASSWORD
+  - SECRET

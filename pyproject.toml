@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "multi-agent-orchestrator"
+dynamic = ["version"]
+description = "Local multi-agent software-engineering runtime: coordinates Supervisor / Executor / Reviewer coding-agent CLIs through a persistent, verifiable, resumable task queue"
+readme = "README.md"
+requires-python = ">=3.10"
+# 版本与依赖的**权威**定义在 VERSION / requirements*.txt。
+# 这里刻意只放核心运行时两项（与 requirements.txt 一致），
+# 避免同一份依赖清单在两个地方各自漂移。
+dependencies = [
+  "pydantic>=2.7,<3",
+  "PyYAML>=6,<7",
+]
+
+[project.optional-dependencies]
+# 进程内 FAISS 向量索引。不装则语义检索自动退化为 FTS5 词法（WARN，不影响可用性）。
+semantic = ["numpy", "faiss-cpu"]
+# 测试与计数工具。
+dev = ["pytest>=8"]
+
+[project.scripts]
+mao = "main:main"
+
+[tool.setuptools]
+py-modules = ["main"]
+packages = [
+  "mao",
+  "mao/core",
+  "mao/agents",
+  "mao/transports",
+  "mao/harness",
+  "mao/harness/discovery",
+  "mao/memory",
+  "mao/memory/embeddings",
+  "mao/memory/embeddings/providers",
+  "mao/memory/vector_index",
+  "mao/scheduler",
+  "mao/workspaces",
+  "mao/checkpoints",
+]
+
+# 语义检索的 embedding worker 需要 torch + sentence-transformers：
+# 那是**独立 venv**，不属于本包的任何 extras，见 requirements-ml.txt。
+# 把它做成 extras 会诱导用户装进主环境，而 torch 与 numpy/faiss 同环境
+# 在同一台 Windows 上实测会互相踩坏。

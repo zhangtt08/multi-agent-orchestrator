@@ -1,0 +1,178 @@
+# ===========================================================================
+# Multi-Agent Orchestrator —— 默认（生产）配置
+# ===========================================================================
+#
+# 这一份是 v1.0 的产品入口：不带 --config-dir 时加载的就是它。
+# 三个角色都绑真实 CLI Harness（Codex + Claude + Codex），
+# 带持久队列、并发调度、GIT_WORKTREE 隔离与 stage 级断点续跑。
+#
+# 想先在不装任何 CLI 的机器上看这套东西怎么跑：用离线 Mock 档
+#
+#     --config-dir config_offline
+#
+# 历史阶段配置（config_p2 … config_p10）原样保留，用于复现当时的验收；
+# 日常使用不需要它们。
+#
+# ---------------------------------------------------------------------------
+# 机器相关路径一律走环境变量占位符，本文件里不出现任何用户目录。
+# 未设置时 CLI 由 mao/harness/discovery 自动定位（PATH + 已知安装位置），
+# 所以不配环境变量也能跑；配了则以你配的为准。
+#
+#     CLAUDE_CLI_PATH / CODEX_CLI_PATH
+#     MEMORY_EMBEDDING_MODEL_PATH / MEMORY_EMBEDDING_INTERPRETER / MEMORY_HF_HOME
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# 执行循环的边界
+# ---------------------------------------------------------------------------
+max_rounds: 3                    # 一个任务最多几轮（FAIL→Replan 算新一轮）
+max_agent_calls_per_task: 15     # 真实调用总量上限：花钱的闸门，不是装饰
+max_plan_repair_attempts: 1
+repair_strategy: supervisor_replan
+#   supervisor_replan  = 验收失败后回到 Supervisor 重规划（会再花一次调用）
+#   direct_reviewer_prompt = 不重规划，直接把修复要求交给 Reviewer 复审
+stop_on_execution_error: true    # Executor 抛异常时立即终止，而不是当一轮失败继续烧
+
+track_usage: true
+default_timeout_seconds: 900
+verification_timeout_seconds: 300
+
+# ---------------------------------------------------------------------------
+# 产物落点（全部 gitignored；删掉即可重来）
+# ---------------------------------------------------------------------------
+runtime_dir: runtime             # 每个任务的 state/history/logs/artifacts
+workspace_dir: workspaces        # 任务源工作区放这里（不属于本仓库）
+dry_run: false
+run_preflight: true              # 跑任务前先做环境体检
+max_response_repair_attempts: 1  # 结构不合法时给一次"只修格式"的机会
+verbose: true
+write_pretty_json: true
+
+# 日志里的脱敏词根：命中即打码，不依赖具体 provider
+redacted_env_keys:
+  - API_KEY
+  - AUTH_TOKEN
+  - TOKEN
+  - COOKIE
+  - PASSWORD
+  - SECRET
+
+# ===========================================================================
+# 持久队列 + 调度
+# ===========================================================================
+scheduler:
+  enabled: true
+  db_path: ./runtime_scheduler/queue.db
+  attempts_root: runtime                    # <attempts_root>/<rt_id>/attempt<N>/
+  max_concurrent_tasks: 1                   # 默认串行：一次只动一个工作区
+  worker_pool_size: 1                       # 想并发就与上面一起调大
+  default_priority: NORMAL
+  default_max_attempts: 3                   # 业务级重试 = 新 attempt
+  lease_timeout_seconds: 120                # 心跳会续租；真实调用慢也不被抢走
+  heartbeat_seconds: 15
+  poll_seconds: 2.0
+  shutdown_grace_seconds: 60                # Ctrl+C 后让在跑的 stage 收到安全边界
+  aging_enabled: true                       # 排队过久自动提优先级，避免饿死
+  aging_interval_minutes: 30
+  aging_step: 1
+  max_active_real_harness_calls: 1
+
+  retry:                                    # 基础设施类失败才按退避重试
+    base_delay_seconds: 30
+    max_delay_seconds: 600
+    jitter_seconds: 0
+
+  # ---- 调用级容量闸门：任务并发 ≠ Agent 调用并发 ----
+  # 默认全部 = 1：刚开程序就不会同时起一堆真实 CLI。
+  # 超出即排队（CAPACITY_WAIT_STARTED 事件），不是失败。
+  capacity:
+    global_agent_calls: 1
+    provider_default: 1
+    # 键 = harness profile 名，必须与 config/agents.yaml 里绑定的名字一致。
+    # 写一个不存在的键不会报错，只会静默落到 provider_default —— 那就不是配置了。
+    providers:
+      codex_supervisor: 1
+      codex_executor: 1
+      codex_reviewer: 1
+
+  # ---- 工作区隔离 ----
+  #   DIRECT        单任务、直接改原工作区（最简单，也最没有保护）
+  #   GIT_WORKTREE  推荐：detached worktree 隔离执行，源仓库保持干净
+  #   COPY          非 Git 项目的隔离手段（复制一份，排除重型目录）
+  # 任务完成后不自动 merge：保留 worktree + changes.patch 交人工决定。
+  workspace:
+    default_strategy: GIT_WORKTREE
+    worktree_root: ./runtime_worktrees
+
+  # ---- 多任务共用一个 embedding worker 进程 ----
+  runtime_resources:
+    shared_embedding_provider: true
+    embedding_worker_count: 1
+
+# ===========================================================================
+# 进程级断点续跑（durable checkpoint）
+# ===========================================================================
+# 这是 Orchestrator 的 durability 能力，不属于 scheduler，所以是顶层段。
+# 崩溃后 scheduler recover / queue resume 会优先从最近的"已提交 stage"继续：
+# 已完成的规划、执行、框架验证都不重跑。恢复粒度是 stage 级，
+# Agent 单次调用中途与 token 级不可恢复；调度语义是 at-least-once。
+checkpoint:
+  enabled: true
+  backend: sqlite
+  auto_resume: true
+  max_resume_epochs: 3           # 一个 attempt 最多续跑几次，超了就判失败
+  validate_workspace: true       # 工作区指纹不符 → 拒绝盲恢复
+  validate_artifact_hashes: true # artifact SHA256 校验
+  execution_incomplete_policy: recovery_replan   # 执行半路崩 → 有改动就走重规划
+  workspace_mismatch_policy: block               # 不符就 BLOCK，不猜
+  db_path: ""                    # 空 = <attempts_root>/checkpoints.db
+
+# ===========================================================================
+# 长期记忆
+# ===========================================================================
+# 记忆是优化层，不是依赖：required=false —— 任何记忆故障只降级为 WARNING，
+# 绝不因为"经验库读不到"而让整个 Runtime 跑不动。
+memory:
+  enabled: true
+  backend: sqlite
+  path: ./memory/memory.db
+  min_confidence: MEDIUM
+  auto_extract: true
+  required: false
+  project_id: multi-agent-orchestrator
+
+  # 检索效果按"当初有没有帮上忙"反馈调节；没有机械证据就记 UNKNOWN，
+  # 不编造 HELPFUL/HARMFUL。
+  outcome_feedback:
+    enabled: true
+    auto_evaluate: true
+    minimum_samples: 3
+    outcome_weight: 0.05         # 弱信号：scope/safety 永远排在它前面
+    role_aware: true
+    required: false
+
+  semantic:
+    enabled: true                # 三个环境变量没配时会退化为词法检索（WARN 不 FAIL）
+    provider: worker             # torch 装在独立 venv，主进程不承载 ML 运行时
+    vector_backend: faiss
+    model_path: ${MEMORY_EMBEDDING_MODEL_PATH}
+    worker_interpreter: ${MEMORY_EMBEDDING_INTERPRETER}
+    hf_home: ${MEMORY_HF_HOME}
+    hf_endpoint: https://hf-mirror.com   # huggingface.co 在部分网络不可达
+    hf_extra_env:
+      HF_HUB_DISABLE_XET: "1"
+    lazy_load: true              # 不在 import 期加载模型
+    batch_size: 16
+    minimum_vector_score: 0.3
+    index_dir: ./memory/vector_index
+
+  retrieval:
+    supervisor_top_k: 5
+    executor_top_k: 3
+    reviewer_top_k: 3
+    mode: hybrid                 # hybrid / semantic / lexical
+    hybrid:
+      vector_weight: 0.55
+      lexical_weight: 0.25
+      scope_weight: 0.15
+      confidence_weight: 0.05

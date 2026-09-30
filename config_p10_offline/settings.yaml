@@ -1,0 +1,158 @@
+# ===========================================================================
+# Phase 10 Demo 的**离线**配置（config_p10_offline）
+# ===========================================================================
+# 与 config_p10 同构：checkpoint.enabled + auto_resume + GIT_WORKTREE +
+# 容量闸门 + 心跳全部一致；只有两类差异，且都是为了"可在任何机器重跑"：
+#
+#   1. agents.yaml 绑 Mock（不消耗任何真实 Harness 配额）
+#   2. runtime / queue / checkpoint 路径独立（不与真实 Demo 证据互覆盖）
+#   3. scheduler 段为 Demo 确定性收窄：单并发 + inline（pool_size=0），
+#      使进程 1 的崩溃以**未捕获异常**真的杀死解释器（§17 要求），
+#      并把 lease 缩到 8s 让 stale recovery 在秒级发生
+#
+# 真实 Harness 版（Codex Supervisor / Claude Executor / Codex Reviewer）：
+#     python tools/phase10_checkpoint_demo.py --config-dir config_p10
+# 机器路径一律走环境变量（${...} 展开在 mao/harness/profiles.py，§18）：
+#     CLAUDE_CLI_PATH / CODEX_CLI_PATH
+#     MEMORY_EMBEDDING_MODEL_PATH / MEMORY_EMBEDDING_INTERPRETER / MEMORY_HF_HOME
+
+# ===========================================================================
+# Phase 10 Demo 的**离线**配置 —— 与 config_p10 完全同构（scheduler +
+# checkpoint + GIT_WORKTREE + 容量/心跳全部一致），只有两处不同：
+#   1. 角色绑定为 Mock（不消耗任何真实 Harness 配额，可在任意机器重跑）
+#   2. runtime/queue/checkpoint 路径独立（不与真实 Demo 证据互覆盖）
+# 真实 Harness 版：--config-dir config_p10
+# ===========================================================================
+max_plan_repair_attempts: 1
+repair_strategy: supervisor_replan
+
+max_rounds: 3
+max_agent_calls_per_task: 15
+
+track_usage: true
+
+runtime_dir: runtime_p10/offline
+workspace_dir: workspaces
+default_timeout_seconds: 900
+stop_on_execution_error: true
+verbose: true
+write_pretty_json: true
+
+dry_run: false
+run_preflight: true
+max_response_repair_attempts: 1
+verification_timeout_seconds: 300
+
+redacted_env_keys:
+  - API_KEY
+  - AUTH_TOKEN
+  - TOKEN
+  - COOKIE
+  - PASSWORD
+  - SECRET
+
+# ===========================================================================
+# 阶段九：并发调度（§77/§78）
+# ===========================================================================
+scheduler:
+  enabled: true
+  db_path: ./runtime_scheduler/queue_p10_offline.db   # P9 Demo 独立队列库（P8 数据不动）
+  max_concurrent_tasks: 1                      # Demo：单并发（配合 pool_size=0 = inline）
+  worker_pool_size: 0                          # 0 = inline：崩溃能以未捕获异常杀死进程
+  default_priority: NORMAL                   # §9
+  default_max_attempts: 3                    # §23
+  heartbeat_seconds: 15                      # §51：心跳服务周期（真实调用常 >120s，
+                                             #      心跳线程保证 lease 不因长调用过期）
+  lease_timeout_seconds: 8                     # 秒级可复现；真实 Harness 用 config_p10 的 120s
+  poll_seconds: 2.0
+  attempts_root: runtime_p10/offline                  # 每 attempt 独立 runtime 子目录
+  shutdown_grace_seconds: 60                 # §47 graceful shutdown
+  aging_enabled: true
+  aging_interval_minutes: 30
+  aging_step: 1
+  max_active_real_harness_calls: 3           # §41（Phase 8 兼容字段）
+  retry:                                     # §22 指数退避
+    base_delay_seconds: 30
+    max_delay_seconds: 600
+    jitter_seconds: 0
+
+  # ---- §27 调用级容量闸门（key = harness profile 名，无品牌判断，§26）----
+  # 目标（§11）：任务并发(2) ≠ 无限 Agent Call 并发。
+  #   global_agent_calls=2  —— 全局同时最多 2 个真实调用（§19 实证上限）
+  #   每角色 = 1            —— 同一 provider 的调用串行（§18 实证），
+  #                            等待 = CAPACITY_WAIT_STARTED 事件，不是失败
+  capacity:
+    global_agent_calls: 2
+    provider_default: 1
+    providers:
+      codex_supervisor: 1
+      real_executor: 1
+      codex_reviewer: 1
+
+  # ---- §21 workspace 隔离：同 source repo 的多任务各自 detached worktree ----
+  workspace:
+    default_strategy: GIT_WORKTREE
+    worktree_root: ./runtime_worktrees
+
+  # ---- §43 共享 Runtime 资源：多任务共用一个 BGE worker 进程 ----
+  runtime_resources:
+    shared_embedding_provider: true
+    embedding_worker_count: 1
+
+# ===========================================================================
+# Phase 10（§123）：Stage-Level Durable Checkpoint（Settings 级 —— checkpoint
+# 是 Orchestrator 的 durability，不隶属 scheduler；§125）
+# ===========================================================================
+checkpoint:
+  enabled: true
+  backend: sqlite
+  auto_resume: true                # stale recovery 优先 resume（§66）
+  max_resume_epochs: 3             # §108
+  validate_workspace: true
+  validate_artifact_hashes: true
+  execution_incomplete_policy: recovery_replan   # §51/§53
+  workspace_mismatch_policy: block               # §20/§110
+  db_path: ""                      # 空 = <attempts_root>/checkpoints.db
+
+# ===========================================================================
+# 阶段六/七：Long-Term Memory + Outcome Feedback（与 config_p7/p8 同口径）
+# ===========================================================================
+memory:
+  enabled: true
+  backend: sqlite
+  path: ./runtime_p10/offline/memory/memory.db
+  min_confidence: MEDIUM
+  auto_extract: true
+  required: false
+  project_id: multi-agent-orchestrator
+  outcome_feedback:
+    enabled: true
+    auto_evaluate: true
+    minimum_samples: 3
+    outcome_weight: 0.05
+    role_aware: true
+    required: false
+  semantic:
+    enabled: true
+    provider: worker
+    vector_backend: faiss
+    model_path: ${MEMORY_EMBEDDING_MODEL_PATH}
+    worker_interpreter: ${MEMORY_EMBEDDING_INTERPRETER}
+    hf_home: ${MEMORY_HF_HOME}
+    hf_endpoint: https://hf-mirror.com
+    hf_extra_env:
+      HF_HUB_DISABLE_XET: "1"
+    lazy_load: true
+    batch_size: 16
+    minimum_vector_score: 0.3
+    index_dir: ./memory/vector_index
+  retrieval:
+    supervisor_top_k: 5
+    executor_top_k: 3
+    reviewer_top_k: 3
+    mode: hybrid
+    hybrid:
+      vector_weight: 0.55
+      lexical_weight: 0.25
+      scope_weight: 0.15
+      confidence_weight: 0.05

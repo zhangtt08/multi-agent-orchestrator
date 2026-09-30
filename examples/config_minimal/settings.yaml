@@ -1,0 +1,67 @@
+# 最小可运行配置 —— 零配额，不需要任何真实 CLI
+#
+# 这份目录的存在理由：让"先看清楚配置长什么样"的人有一处**真的能被加载**的参照
+# （三份文件、字段全是真的，不是示意片段）：
+#
+#     python main.py doctor --config-dir examples/config_minimal
+#
+# 也可以拿它体会队列与断点的机制（不消耗任何额度）：
+#
+#     python main.py queue submit --goal "fix the failing multiply test" \
+#            --workspace examples/calculator --strategy COPY \
+#            --config-dir examples/config_minimal
+#     python main.py scheduler run --once --config-dir examples/config_minimal
+#     python main.py queue list  --config-dir examples/config_minimal
+#
+# ⚠ 这条 Mock 路径的任务会以 **FAILED** 收场，这是预期结果：agents.yaml 里那三个
+# Mock Adapter 按框架内置的演示剧本说话（剧本结尾是一个策略阻断），它验证的是
+# "提交→调度→隔离工作区→checkpoint→终态→产物"这条链路通不通，不是修好了计算器。
+# 想看到"端到端全部通过"，跑 python tools/smoke_test.py（同样零配额，8 步全绿）。
+# 想看真实任务的样子，用 config/ 配 examples/calculator —— 那会消耗 CLI 额度。
+#
+# 与生产配置 config/ 的差别全部写在这里：并发 1、无记忆层、无真实 Harness。
+
+max_rounds: 2                 # Mock 剧本两轮内收敛
+max_agent_calls_per_task: 6   # 调用闸门：任务再跑偏也不可能起无限次调用
+track_usage: true
+
+runtime_dir: runtime/example   # 每次运行的 state / 日志 / 产物落在这里
+workspace_dir: runtime/example/workspaces
+default_timeout_seconds: 300
+stop_on_execution_error: true
+write_pretty_json: true
+
+dry_run: false
+run_preflight: true
+
+# 生产配置里那三大能力（队列调度 / 断点续跑 / 并发隔离）在最小配置里都留着，
+# 只是把并发降到 1、把与本机绑定的东西去掉。
+scheduler:
+  enabled: true
+  db_path: ./runtime/example/queue.db
+  max_concurrent_tasks: 1
+  worker_pool_size: 1
+  default_priority: NORMAL
+  default_max_attempts: 2
+  heartbeat_seconds: 15
+  lease_timeout_seconds: 120
+  poll_seconds: 1.0
+  attempts_root: runtime/example
+  shutdown_grace_seconds: 30
+  capacity:
+    global_agent_calls: 1
+    provider_default: 1
+  workspace:
+    default_strategy: COPY        # 非 git 目录也能跑；生产建议 GIT_WORKTREE
+    worktree_root: ./runtime/example/worktrees
+
+checkpoint:
+  enabled: true                   # 断点续跑与真实/Mock 无关，这里照样能验证
+  auto_resume: true
+  max_resume_epochs: 2
+  validate_workspace: true
+  validate_artifact_hashes: true
+  db_path: ""                     # 空 = <attempts_root>/checkpoints.db
+
+memory:
+  enabled: false                  # 最小配置不带记忆层；生产见 config/settings.yaml

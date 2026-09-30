@@ -1,0 +1,134 @@
+# ===========================================================================
+# 阶段九 settings：Concurrent Task Runtime & Workspace Isolation（§77）
+# ===========================================================================
+# 基于 Phase 8 已验证的真实 Harness 配置（agents.yaml / harness.yaml 与
+# config_p8 完全一致 —— Phase 5/7 验证过的三真实角色拓扑一字未动），
+# 变化只在 scheduler 段：
+#
+#     max_concurrent_tasks: 2   —— 两个 RuntimeTask 真正同时 RUNNING（§1）
+#     worker_pool_size: 2       —— 独立 worker pool（>1 即脱离 inline 模式）
+#     capacity                  —— GLOBAL + PROVIDER 调用级容量闸门（§27）
+#     workspace                 —— GIT_WORKTREE 隔离执行工作区（§21）
+#
+# 机器路径一律走环境变量（${...} 展开在 mao/harness/profiles.py，§18）：
+#     CLAUDE_CLI_PATH / CODEX_CLI_PATH
+#     MEMORY_EMBEDDING_MODEL_PATH / MEMORY_EMBEDDING_INTERPRETER / MEMORY_HF_HOME
+
+max_plan_repair_attempts: 1
+repair_strategy: supervisor_replan
+
+max_rounds: 3
+max_agent_calls_per_task: 15
+
+track_usage: true
+
+runtime_dir: runtime_p9
+workspace_dir: workspaces
+default_timeout_seconds: 900
+stop_on_execution_error: true
+verbose: true
+write_pretty_json: true
+
+dry_run: false
+run_preflight: true
+max_response_repair_attempts: 1
+verification_timeout_seconds: 300
+
+redacted_env_keys:
+  - API_KEY
+  - AUTH_TOKEN
+  - TOKEN
+  - COOKIE
+  - PASSWORD
+  - SECRET
+
+# ===========================================================================
+# 阶段九：并发调度（§77/§78）
+# ===========================================================================
+scheduler:
+  enabled: true
+  db_path: ./runtime_scheduler/queue_p9.db   # P9 Demo 独立队列库（P8 数据不动）
+  max_concurrent_tasks: 2                    # §1：证明 >1 的真并发
+  worker_pool_size: 2                        # §3：ThreadPoolExecutor pool
+  default_priority: NORMAL                   # §9
+  default_max_attempts: 3                    # §23
+  heartbeat_seconds: 15                      # §51：心跳服务周期（真实调用常 >120s，
+                                             #      心跳线程保证 lease 不因长调用过期）
+  lease_timeout_seconds: 120                 # §13
+  poll_seconds: 2.0
+  attempts_root: runtime_p9                  # 每 attempt 独立 runtime 子目录
+  shutdown_grace_seconds: 60                 # §47 graceful shutdown
+  aging_enabled: true
+  aging_interval_minutes: 30
+  aging_step: 1
+  max_active_real_harness_calls: 3           # §41（Phase 8 兼容字段）
+  retry:                                     # §22 指数退避
+    base_delay_seconds: 30
+    max_delay_seconds: 600
+    jitter_seconds: 0
+
+  # ---- §27 调用级容量闸门（key = harness profile 名，无品牌判断，§26）----
+  # 目标（§11）：任务并发(2) ≠ 无限 Agent Call 并发。
+  #   global_agent_calls=2  —— 全局同时最多 2 个真实调用（§19 实证上限）
+  #   每角色 = 1            —— 同一 provider 的调用串行（§18 实证），
+  #                            等待 = CAPACITY_WAIT_STARTED 事件，不是失败
+  capacity:
+    global_agent_calls: 2
+    provider_default: 1
+    providers:
+      codex_supervisor: 1
+      real_executor: 1
+      codex_reviewer: 1
+
+  # ---- §21 workspace 隔离：同 source repo 的多任务各自 detached worktree ----
+  workspace:
+    default_strategy: GIT_WORKTREE
+    worktree_root: ./runtime_worktrees
+
+  # ---- §43 共享 Runtime 资源：多任务共用一个 BGE worker 进程 ----
+  runtime_resources:
+    shared_embedding_provider: true
+    embedding_worker_count: 1
+
+# ===========================================================================
+# 阶段六/七：Long-Term Memory + Outcome Feedback（与 config_p7/p8 同口径）
+# ===========================================================================
+memory:
+  enabled: true
+  backend: sqlite
+  path: ./memory/memory.db
+  min_confidence: MEDIUM
+  auto_extract: true
+  required: false
+  project_id: multi-agent-orchestrator
+  outcome_feedback:
+    enabled: true
+    auto_evaluate: true
+    minimum_samples: 3
+    outcome_weight: 0.05
+    role_aware: true
+    required: false
+  semantic:
+    enabled: true
+    provider: worker
+    vector_backend: faiss
+    model_path: ${MEMORY_EMBEDDING_MODEL_PATH}
+    worker_interpreter: ${MEMORY_EMBEDDING_INTERPRETER}
+    hf_home: ${MEMORY_HF_HOME}
+    hf_endpoint: https://hf-mirror.com
+    hf_extra_env:
+      HF_HUB_DISABLE_XET: "1"
+    lazy_load: true
+    batch_size: 16
+    minimum_vector_score: 0.3
+    index_dir: ./memory/vector_index
+  retrieval:
+    supervisor_top_k: 5
+    executor_top_k: 3
+    reviewer_top_k: 3
+    mode: hybrid
+    hybrid:
+      vector_weight: 0.55
+      lexical_weight: 0.25
+      scope_weight: 0.15
+      confidence_weight: 0.05

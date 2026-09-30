@@ -1,0 +1,13 @@
+{
+  "goal": "calc.py 里的 multiply(a, b) 错误地返回了 a + b。把它改成返回 a * b，使 test_calc.py 中的 test_multiply 与 test_multiply_negative 通过。",
+  "constraints": [
+    "只修改 calc.py",
+    "不得修改、删除或跳过 test_calc.py 中的任何断言",
+    "不要新增第三方依赖"
+  ],
+  "workspace_path": "examples/calculator",
+  "max_rounds": 3,
+  "priority": "NORMAL",
+  "max_attempts": 2,
+  "strategy": "GIT_WORKTREE"
+}

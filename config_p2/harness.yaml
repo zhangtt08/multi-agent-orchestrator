@@ -1,0 +1,75 @@
+# 第二阶段演示配置：三个角色全部走真实 CLI 子进程（tests/fake_cli_agent.py）。
+#
+# 这份文件由 config/harness.yaml 派生而来，区别是：
+#   1. command 指向当前 Python 解释器，extra_args 指向假 Agent 脚本
+#   2. 每个角色用 --role 显式声明身份
+#      （真实 Harness 不需要这个 —— 它们能从 Prompt 里读出自己是哪个角色。
+#        这里显式指定只是为了让测试矩阵完全确定，不受 Prompt 措辞影响。）
+#
+# 为什么 extra_args 里要有 --role？
+#   fake_cli_agent 会先从 Prompt 推断角色。推断逻辑虽然已经按结构化标记
+#   做了加固（见 tests/fake_cli_agent.py 的 ROLE_MARKERS 注释），
+#   但在测试里，"确定"比"聪明"更重要。
+
+base_cli:
+  description: "Shared defaults for the fake CLI harness."
+  command: "C:/Users/EDY/.workbuddy/binaries/python/envs/default/Scripts/python.exe"
+  extra_args: ["C:/Users/EDY/WorkBuddy/2026-09-22-17-00-15/multi-agent-orchestrator/tests/fake_cli_agent.py"]
+  prompt_mode: stdin
+  working_directory_mode: workspace
+  output_mode: stdout
+  timeout_seconds: 60
+  allowed_exit_codes: [0]
+  supports_cli: true
+  supports_json_output: true
+  supports_file_write: true
+  supports_shell: true
+  supports_git: true
+  supports_streaming: false
+  resume_strategy: none
+  redacted_env_keys: [API_KEY, TOKEN, COOKIE, PASSWORD, SECRET]
+
+fake_supervisor:
+  extends: base_cli
+  description: "Fake CLI agent acting as the planner (stdin mode)."
+  extra_args: ["C:/Users/EDY/WorkBuddy/2026-09-22-17-00-15/multi-agent-orchestrator/tests/fake_cli_agent.py", "--role", "supervisor"]
+
+fake_executor_a:
+  extends: base_cli
+  description: "Fake CLI executor, prompt over stdin."
+  extra_args: ["C:/Users/EDY/WorkBuddy/2026-09-22-17-00-15/multi-agent-orchestrator/tests/fake_cli_agent.py", "--role", "executor"]
+
+fake_executor_b:
+  extends: base_cli
+  description: "Fake CLI executor, prompt as an argv element (argument mode)."
+  prompt_mode: argument
+  prompt_argument: --prompt
+  extra_args: ["C:/Users/EDY/WorkBuddy/2026-09-22-17-00-15/multi-agent-orchestrator/tests/fake_cli_agent.py", "--role", "executor"]
+  timeout_seconds: 45
+  allowed_exit_codes: [0, 2]
+
+fake_reviewer:
+  extends: base_cli
+  description: "Fake CLI agent acting as the reviewer."
+  extra_args: ["C:/Users/EDY/WorkBuddy/2026-09-22-17-00-15/multi-agent-orchestrator/tests/fake_cli_agent.py", "--role", "reviewer"]
+
+# file 模式：验证超长 Prompt 落临时文件的路径与清理
+fake_executor_file:
+  extends: base_cli
+  description: "Fake CLI executor, prompt delivered via a temp file."
+  prompt_mode: file
+  prompt_argument: --prompt-file
+  prompt_file_dir: runtime/temp/prompts
+  cleanup_prompt_file: true
+  extra_args: ["C:/Users/EDY/WorkBuddy/2026-09-22-17-00-15/multi-agent-orchestrator/tests/fake_cli_agent.py", "--role", "executor"]
+
+# ---------------------------------------------------------------------------
+# 真实 Harness 的 Profile 模板 —— 刻意留空。
+# 未确认官方文档前，任何具体参数都是编造。填写指引见 README「Adding a Real Harness」。
+# ---------------------------------------------------------------------------
+# real_agent_like:
+#   extends: base_cli
+#   command: ""            # TODO 官方文档给出的可执行文件名
+#   extra_args: []         # TODO 官方非交互模式开关
+#   prompt_mode: stdin     # TODO 改成官方实际支持的方式
+#   prompt_argument: null  # TODO argument/file 模式必填

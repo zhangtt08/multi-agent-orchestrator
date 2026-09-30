@@ -1,0 +1,83 @@
+# ===========================================================================
+# 阶段五：三真实 Harness（Real Supervisor + Real Executor + Real Reviewer）
+# ===========================================================================
+#
+#     Codex Supervisor  →  Plan  →  Claude Executor  →  Framework Evidence
+#                                  →  Codex Reviewer  →  PASS / FAIL
+#
+# §1 为什么 Supervisor 用 Codex（不是品牌优劣）：
+#     Codex 已实测验证 read-only / stdin / 结构化输出 / 真实 CLI。
+#     Supervisor 与 Reviewer 一样是**只读**角色，所以能复用同一套 Harness 能力。
+#
+# §14 Supervisor 的唯一产物是 Plan。它不允许修改文件、不允许宣称完成。
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# 共享底座：Claude 侧（与 config_p4 相同，Executor 不变 —— §17 不动已验证机制）
+# ---------------------------------------------------------------------------
+base_real_cli:
+  description: "Shared defaults for the Claude Code executor."
+  command: "${CLAUDE_CLI_PATH}"
+  prompt_mode: stdin
+  working_directory_mode: workspace
+  output_mode: stdout
+  timeout_seconds: 600
+  allowed_exit_codes: [0]
+  supports_cli: true
+  supports_json_output: true
+  supports_file_write: true
+  supports_shell: true
+  supports_git: true
+  supports_streaming: false
+  resume_strategy: none
+  environment: {}
+  redacted_env_keys: [API_KEY, AUTH_TOKEN, TOKEN, COOKIE, PASSWORD, SECRET]
+
+real_executor:
+  extends: base_real_cli
+  description: "Real Claude Code CLI as Executor (non-interactive, edit-allowed)."
+  extra_args: ["-p", "--permission-mode", "acceptEdits"]
+
+# ---------------------------------------------------------------------------
+# 共享底座：Codex 侧
+# ---------------------------------------------------------------------------
+base_codex_cli:
+  description: "Shared defaults for the Codex CLI (read-only roles)."
+  command: "${CODEX_CLI_PATH}"
+  prompt_mode: stdin
+  working_directory_mode: workspace
+  output_mode: stdout
+  timeout_seconds: 600
+  allowed_exit_codes: [0]
+  supports_cli: true
+  supports_json_output: true
+  supports_file_write: false     # Supervisor 与 Reviewer 都是只读
+  supports_shell: false
+  supports_git: false
+  supports_streaming: false
+  resume_strategy: none
+  environment: {}
+  redacted_env_keys: [API_KEY, AUTH_TOKEN, TOKEN, COOKIE, PASSWORD, SECRET]
+
+codex_reviewer:
+  extends: base_codex_cli
+  description: "Real Codex CLI as Reviewer (read-only sandbox)."
+  extra_args: ["exec", "-s", "read-only", "--skip-git-repo-check", "-"]
+
+# ---------------------------------------------------------------------------
+# Real Supervisor —— Codex CLI（只读）
+# ---------------------------------------------------------------------------
+# 与 codex_reviewer 用**同一个 Adapter**（GenericCLIAdapter）和同一个底座，
+# 差异只是参数与角色绑定 —— 这正是"换角色只改配置"的落点。
+#
+# §2/§22：虽然 Supervisor 与 Reviewer 用同一个 Provider，
+#         它们的 Session **必须**隔离（registry 按 role 缓存、
+#         session manager 按 (task_id, role) 键控 —— 结构上已隔离）。
+#
+# timeout 偏大：Supervisor 要读工作区再规划，比单轮复审慢。
+# ---------------------------------------------------------------------------
+codex_supervisor:
+  extends: base_codex_cli
+  description: "Real Codex CLI as Supervisor / Planner (read-only sandbox)."
+  extra_args: ["exec", "-s", "read-only", "--skip-git-repo-check", "-"]
+  timeout_seconds: 900

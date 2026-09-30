@@ -1,0 +1,103 @@
+# ===========================================================================
+# Harness Profile —— 真实 CLI 的调用画像（生产默认）
+# ===========================================================================
+#
+# 换 Harness 不改代码，只改这里：一个 provider 与另一个 provider 的差别如果
+# 只是「命令不同 / 参数不同 / prompt 投喂方式不同」，它们就共用同一个
+# GenericCLIAdapter，只是 Profile 不同。
+#
+# 命令一律写成 ${ENV} 占位符 —— 本文件不出现任何用户目录。
+# 未设置对应环境变量时也不会失败：可执行文件由 mao/harness/discovery 定位
+# （显式路径 → ${ENV} → PATH → 平台已知安装位置），doctor 与实跑同一判据。
+#
+# 下面每个参数都是在真实 CLI 上实测出来的，不是从文档抄的；
+# 两处反直觉的地方单独标了 ★，改之前先读。
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# Claude Code —— 可写执行角色
+# ---------------------------------------------------------------------------
+base_real_cli:
+  description: "Claude Code CLI（共享底座：可写执行角色）"
+  command: "${CLAUDE_CLI_PATH}"
+  prompt_mode: stdin               # prompt 走 stdin，绝不拼进 argv（避免泄漏与转义问题）
+  working_directory_mode: workspace
+  output_mode: stdout
+  timeout_seconds: 900
+  allowed_exit_codes: [0]
+  supports_cli: true
+  supports_json_output: true
+  supports_file_write: true
+  supports_shell: true
+  supports_git: true
+  supports_streaming: false
+  resume_strategy: none            # 会话续接未经验证，不伪造"能续"
+  environment: {}
+  redacted_env_keys: [API_KEY, AUTH_TOKEN, TOKEN, COOKIE, PASSWORD, SECRET]
+
+real_executor:
+  extends: base_real_cli
+  description: "Executor：非交互、允许落盘修改"
+  # ★ 两点实测结论，照抄旧文档会静默不改文件：
+  #   1) 权限模式必须 acceptEdits。dontAsk 不是"别问我"而是"需要问的一律拒"，
+  #      用它 Agent 只会报告"我被拦住了"，文件其实没改。
+  #   2) 刻意不用 --output-format json。它输出的是信封
+  #      {"type":"result","result":"..."}，框架的 JSON 抽取器不解信封，
+  #      契约校验会拿到空对象。执行角色的结构化输出靠 prompt 约束 + 文本输出。
+  extra_args: ["-p", "--permission-mode", "acceptEdits"]
+
+# ---------------------------------------------------------------------------
+# Codex CLI —— 只读角色（Supervisor / Reviewer）
+# ---------------------------------------------------------------------------
+base_codex_cli:
+  description: "Codex CLI（共享底座：只读角色）"
+  command: "${CODEX_CLI_PATH}"
+  prompt_mode: stdin
+  working_directory_mode: workspace
+  output_mode: stdout
+  timeout_seconds: 600
+  allowed_exit_codes: [0]
+  supports_cli: true
+  supports_json_output: true
+  supports_file_write: false       # 只读角色：写文件在结构上就不可能
+  supports_shell: false
+  supports_git: false
+  supports_streaming: false
+  resume_strategy: none
+  environment: {}
+  redacted_env_keys: [API_KEY, AUTH_TOKEN, TOKEN, COOKIE, PASSWORD, SECRET]
+
+codex_supervisor:
+  extends: base_codex_cli
+  description: "Supervisor / Planner：读工作区后产出 Plan，不许改文件、不许宣称完成"
+  # exec -s read-only = 沙箱只读；末尾的 "-" 表示从 stdin 读 prompt。
+  # --skip-git-repo-check：被调度的工作区可能还没 .git（COPY 策略下就是）。
+  extra_args: ["exec", "-s", "read-only", "--skip-git-repo-check", "-"]
+  timeout_seconds: 900             # 规划要先读代码，比复审慢
+
+codex_reviewer:
+  extends: base_codex_cli
+  description: "Reviewer：只依据框架提供的证据判定 PASS / FAIL"
+  extra_args: ["exec", "-s", "read-only", "--skip-git-repo-check", "-"]
+
+# ---------------------------------------------------------------------------
+# 默认执行角色：Codex 作为可写 Executor（带沙箱）
+# ---------------------------------------------------------------------------
+# Provider 无关是这套框架的立足点：Claude 侧额度耗尽时，把
+# config/agents.yaml 里 executor.harness_profile 改成 real_executor 就切回去
+# （记得连 config/settings.yaml 的 capacity.providers 键一起改）。
+#
+# workspace-write 的副作用范围已在本机实测（`codex sandbox`，不经模型、零配额）：
+#   写 cwd（= 隔离工作区）      允许
+#   写 cwd 之外的用户目录       拒绝（GetContentWriterUnauthorizedAccess）
+#   读工作区之外的文件          允许 —— 所以不必再叠 disk-full-read-access
+# 注意：实测用的是 `codex sandbox` 这个 helper；`codex exec -s workspace-write`
+# 走同一套策略，但端到端的强制力要在下一次真实运行里才算被现场证明。
+codex_executor:
+  extends: base_codex_cli
+  description: "Executor：workspace-write 沙箱，读全盘、写限工作区"
+  extra_args: ["exec", "-s", "workspace-write", "--skip-git-repo-check", "-"]
+  timeout_seconds: 900
+  supports_file_write: true
+  supports_shell: true
+  supports_git: true

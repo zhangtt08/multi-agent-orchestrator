@@ -1,0 +1,24 @@
+# 第二阶段演示配置的运行参数
+
+max_rounds: 5
+runtime_dir: runtime_p2
+workspace_dir: workspace_p2
+default_timeout_seconds: 60
+
+stop_on_execution_error: true
+verbose: true
+write_pretty_json: true
+history_append_only: true
+
+# ---- 第二阶段开关 ----
+dry_run: false
+run_preflight: true
+max_response_repair_attempts: 1
+debug_logging: true
+verification_timeout_seconds: 120
+redacted_env_keys:
+  - API_KEY
+  - TOKEN
+  - COOKIE
+  - PASSWORD
+  - SECRET

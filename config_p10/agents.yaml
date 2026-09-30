@@ -1,0 +1,29 @@
+# ===========================================================================
+# 阶段五：三真实 Harness 角色绑定
+# ===========================================================================
+#
+#   supervisor -> Codex CLI（真实，只读 Planner）
+#   executor   -> Claude Code（真实，可写）
+#   reviewer   -> Codex CLI（真实，只读）
+#
+# §17/§18：Executor -> Reviewer 的自动返工机制**一字未动**。
+#          本阶段只替换 Initial Planning。Supervisor Replan 留到 5.1。
+#
+# §23 Provider Swap：把 supervisor 改回 mock_supervisor 即回到 Phase 4 拓扑，
+#                    核心代码零修改。
+# ===========================================================================
+
+supervisor:
+  provider: generic_cli
+  transport: subprocess
+  harness_profile: codex_supervisor
+
+executor:
+  provider: generic_cli
+  transport: subprocess
+  harness_profile: real_executor
+
+reviewer:
+  provider: generic_cli
+  transport: subprocess
+  harness_profile: codex_reviewer

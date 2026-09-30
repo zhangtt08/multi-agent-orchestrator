@@ -1,0 +1,85 @@
+# ===========================================================================
+# 阶段六 settings（= 阶段五拓扑 + Memory 开启）
+# ===========================================================================
+
+# §13 Plan 契约修复：Supervisor 第一次可能给出"语法对但不可执行"的 Plan。
+# 允许修一次（发回同一个 Supervisor），修不好就失败。
+max_plan_repair_attempts: 1
+
+# §15 返工路径（两种都保留，切换只改配置，core 无品牌判断）：
+#   supervisor_replan       FAIL -> Real Supervisor 看失败上下文后重新规划（默认）
+#   direct_reviewer_prompt  FAIL -> Reviewer 的 next_prompt 直接给 Executor
+#                            （阶段四能力，保留可配）
+repair_strategy: supervisor_replan
+
+# §22 多轮统计：Supervisor 2 次 + Executor 2 次 + Reviewer 2 次 = 6
+max_rounds: 3
+max_agent_calls_per_task: 15
+
+track_usage: true
+
+runtime_dir: runtime_p5
+workspace_dir: workspaces
+default_timeout_seconds: 900
+stop_on_execution_error: true
+verbose: true
+write_pretty_json: true
+
+dry_run: false
+run_preflight: true
+max_response_repair_attempts: 1
+verification_timeout_seconds: 300
+
+redacted_env_keys:
+  - API_KEY
+  - AUTH_TOKEN
+  - TOKEN
+  - COOKIE
+  - PASSWORD
+  - SECRET
+
+# ===========================================================================
+# 阶段六：Long-Term Memory（§36）
+# ===========================================================================
+memory:
+  enabled: true
+  backend: sqlite
+  path: ./memory/memory.db
+  min_confidence: MEDIUM
+  auto_extract: true
+  required: false          # §35：Memory 故障不阻塞任务
+  project_id: multi-agent-orchestrator   # §11 PROJECT scope 归属
+  # ---- 阶段七：Outcome Feedback（§45）----
+  outcome_feedback:
+    enabled: true
+    auto_evaluate: true
+    minimum_samples: 3     # 生产默认（§5 方案 A：历史样本经 phase71_outcome_history.py
+                           # 引导至 >= 3，Demo 不放宽阈值）
+    outcome_weight: 0.05   # §24：弱信号
+    role_aware: true
+    required: false        # §30：归因失败不影响任务
+  # ---- 阶段六 B：语义检索（§35）----
+  semantic:
+    enabled: true
+    provider: worker          # 路径 B：独立 venv 长驻 worker（隔离原生 ML 依赖）
+    vector_backend: faiss
+    model_path: ${MEMORY_EMBEDDING_MODEL_PATH}    # §55：机器路径走环境变量
+    worker_interpreter: ${MEMORY_EMBEDDING_INTERPRETER}
+    hf_home: ${MEMORY_HF_HOME}
+    hf_endpoint: https://hf-mirror.com
+    hf_extra_env:
+      HF_HUB_DISABLE_XET: "1"
+    lazy_load: true           # §32
+    batch_size: 16            # §31
+    minimum_vector_score: 0.3   # §25
+    index_dir: ./memory/vector_index
+  retrieval:
+    supervisor_top_k: 5
+    executor_top_k: 3
+    reviewer_top_k: 3
+    mode: hybrid              # §36：lexical | semantic | hybrid
+    hybrid:
+      vector_weight: 0.55
+      lexical_weight: 0.25
+      scope_weight: 0.15
+      confidence_weight: 0.05

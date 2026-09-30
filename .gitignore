@@ -1,0 +1,75 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.basetemp_run/
+
+# ---- 本机私有配置（§18）----
+# 真实 Harness 可能装在用户私有路径下。把绝对路径提交进仓库是错的：
+# 换台机器就失效，而且泄漏了本机目录结构。
+# 所以本机路径走环境变量（如 ${CODEX_CLI_PATH}）或下列 local 文件。
+*.local.yaml
+*.local.yml
+*.local.toml
+*.local.env
+config*/local.yaml
+config*/local.env
+.env
+.env.local
+
+# ---- 运行产物（必须根锚定 —— 裸规则会吃掉同名源码包）----
+# 事故史：裸 `memory/` 曾吃掉 mao/memory/（2026-09-24，Phase 7 发现）；
+#         裸 `workspaces/` 曾吃掉 mao/workspaces/（2026-09-25，Phase 9 发现，
+#         整个 Phase 9 工作区策略包未版本化）。一切根级运行目录只允许
+#         根锚定形态；测试锁见 tests/test_repository_integrity.py。
+/runtime/
+/runtime_*/
+/runtime_worktrees/
+/runtime_workspaces/
+# Phase 10（§137/§174）：checkpoint 运行数据不入库；
+# 注意根锚定 —— 裸 checkpoints/ 会吃掉 mao/checkpoints/ 源码包
+/runtime_checkpoints/
+# 迁移证据备份（SHA256SUMS + demo_evidence 副本）：审计现场，不入库
+/migration_backup/
+/workspace/
+/workspace_*/
+/workspaces/
+/temp/
+# ---- 阶段八：Scheduler 运行时 DB（§68：根锚定，勿裸写 scheduler/ ——
+#      会把源码包 mao/scheduler/ 整个吃掉，与裸 memory/ 事故同型）----
+/runtime_scheduler/
+
+# ---- 本地环境与发布产物（§59/§61：既不入库也不进 Release 包）----
+/.venv/
+/.venv-*/
+/envs/
+/dist/
+
+# ---- 编辑器 ----
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# ---- 阶段六：Memory 运行时产物（§36，不入库）----
+# 注意必须锚定仓库根：裸 `memory/` 会连带忽略源码包 mao/memory/，
+# 曾导致整个 Memory 层源码处于未版本化状态（2026-09-24 发现）。
+/memory/
+/memory.db
+*.memory.db
+
+# ---- Demo/调试临时输出 ----
+.od*.txt
+.t.txt
+.final.txt
+.p*.log
+.pytest_full.log
+.baseline_count*.log
+.doctor*.log
+.ab_probe.log
+.run2*.log
+.index_status.log
+.pytest_p*.log
+.pytest_*.xml
+.sched*.log

@@ -1,0 +1,31 @@
+# ===========================================================================
+# 角色 → Provider 绑定（生产默认）
+# ===========================================================================
+#
+#   supervisor → Codex CLI      只读，产出 Plan
+#   executor   → Claude Code    可写，改代码
+#   reviewer   → Codex CLI      只读，判 PASS / FAIL
+#
+# 三个角色共用同一个 GenericCLIAdapter：差别只在 Profile（命令/参数/prompt
+# 投喂方式），所以换 Provider 只改这一份文件，核心代码一行不动。
+# 想先不装 CLI 体验整条链路：--config-dir config_offline（全 Mock）。
+# ===========================================================================
+
+supervisor:
+  provider: generic_cli
+  transport: subprocess
+  harness_profile: codex_supervisor
+
+executor:
+  provider: generic_cli
+  transport: subprocess
+  # 执行者走 Codex 的 workspace-write 沙箱：读全盘可以，写只允许落在隔离工作区。
+  # 本机实测（codex sandbox，不经模型、零配额）：写 cwd 内 ✓、写 Music\ 下 ✗（拒绝）、
+  # 读工作区外的文件 ✓。要换回无沙箱的 Claude 档：改成 real_executor，
+  # 同时把 config/settings.yaml 的 capacity.providers 键一起换。
+  harness_profile: codex_executor
+
+reviewer:
+  provider: generic_cli
+  transport: subprocess
+  harness_profile: codex_reviewer

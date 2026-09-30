@@ -1,0 +1,146 @@
+# Harness Profile —— CLI Agent 的调用画像。
+#
+# ===========================================================================
+# 读这一份文件，就理解了第二阶段的核心思想
+# ===========================================================================
+# 换 Harness 不需要改代码，只需要改这里的配置。
+# 一个 provider 与另一个 provider 的差别如果只是
+#   "命令不同 / 参数不同 / prompt 投喂方式不同 / 恢复会话参数不同"
+# 那么它们共用同一个 GenericCLIAdapter，只是 Profile 不同。
+#
+# ===========================================================================
+# 本文件中的 fake_provider_* 只指向 tests/fake_cli_agent.py
+# ===========================================================================
+# 它们是**测试替身**，不是任何真实产品。
+# 真实产品（Codex / Claude Code / Cursor / Zcode / Gemini CLI）的 Profile
+# 刻意留空 —— 因为 Phase 2 明确要求：不凭空编造任何真实产品的 CLI 参数。
+# 请查阅官方文档的"非交互模式"章节后，按下方的字段说明自行填写。
+# 需要确认的信息清单见 docs/ARCHITECTURE.md 的「Adding a Real Harness」章节。
+#
+# 字段速查：
+#   command                   可执行文件名或绝对路径
+#   extra_args                固定参数，例如 ["--non-interactive"]
+#   prompt_mode               stdin | argument | file
+#   prompt_argument           argument/file 模式下承载 prompt 的参数名
+#   prompt_file_dir           file 模式的临时文件目录
+#   working_directory_mode    workspace | fixed | inherit
+#   output_mode               stdout | file | stdout_then_file
+#   output_file               output_mode 含 file 时的结果文件路径
+#   supports_*                能力声明（进能力闸门，供 Orchestrator 判断）
+#   resume_strategy           仅建模；resume_argument 是对应的参数名
+#   timeout_seconds           单次调用超时
+#   allowed_exit_codes        允许的退出码，默认 [0]
+#   environment               注入子进程的环境变量，支持 ${VAR} 引用宿主变量
+#   redacted_env_keys         日志中需要打码的环境变量名（子串匹配）
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# 基座：所有 CLI 型 Harness 的公共默认值
+# ---------------------------------------------------------------------------
+base_cli:
+  description: "Common defaults shared by every CLI-backed harness profile."
+  command: fake_cli_agent
+  prompt_mode: stdin
+  working_directory_mode: workspace
+  output_mode: stdout
+  timeout_seconds: 120
+  allowed_exit_codes: [0]
+  supports_cli: true
+  supports_json_output: true
+  supports_file_write: true
+  supports_shell: true
+  supports_git: true
+  supports_streaming: false
+  resume_strategy: none
+  redacted_env_keys:
+    - API_KEY
+    - TOKEN
+    - COOKIE
+    - PASSWORD
+    - SECRET
+
+# ---------------------------------------------------------------------------
+# 测试替身 A：stdin 模式
+# 与 B 的差别**只有** prompt 投喂方式 —— 这正是"Profile 而非 Adapter"的示范。
+# ---------------------------------------------------------------------------
+fake_provider_a:
+  extends: base_cli
+  description: "Fake CLI agent, prompt delivered over stdin."
+  prompt_mode: stdin
+
+# ---------------------------------------------------------------------------
+# 测试替身 B：argument 模式
+# 换了 prompt 投喂方式、超时、退出码容忍度，但 **没有换 Adapter**。
+# ---------------------------------------------------------------------------
+fake_provider_b:
+  extends: base_cli
+  description: "Fake CLI agent, prompt delivered as an argv element."
+  prompt_mode: argument
+  prompt_argument: --prompt
+  timeout_seconds: 90
+  allowed_exit_codes: [0, 2]
+  supports_session_resume: true
+  resume_strategy: session_id_argument
+  resume_argument: --session-id
+
+# ---------------------------------------------------------------------------
+# 测试替身 C：file 模式
+# 用于验证"超长 Prompt 落临时文件"的路径与清理。
+# ---------------------------------------------------------------------------
+fake_provider_file:
+  extends: base_cli
+  description: "Fake CLI agent, prompt delivered via a temp file."
+  prompt_mode: file
+  prompt_argument: --prompt-file
+  prompt_file_dir: runtime/temp/prompts
+  cleanup_prompt_file: true
+
+# ---------------------------------------------------------------------------
+# 测试替身 D：结果写文件（Mode D）
+# ---------------------------------------------------------------------------
+fake_provider_output_file:
+  extends: base_cli
+  description: "Fake CLI agent that also writes its JSON result to a file."
+  prompt_mode: stdin
+  output_mode: stdout_then_file
+  output_file: runtime/temp/agent_output.json
+
+# ---------------------------------------------------------------------------
+# 真实 Harness 的 Profile 模板 —— 刻意留空，参数必须查官方文档后再填
+# ---------------------------------------------------------------------------
+# 下面每个模板都是**注释**，因为没有确认官方文档前，任何具体参数都是编造。
+# 请复制到本段之下、解除注释、填入你确认过的真实值。
+#
+# NOTE: 关于 prompt_mode 的选择建议：
+#   - 若官方支持从标准输入读取任务描述 -> 用 stdin（最安全，无引号/长度问题）
+#   - 若只支持 -p/--prompt 之类的参数   -> 用 argument，并把参数名填进 prompt_argument
+#   - 若 Prompt 可能非常长（带大段代码） -> 优先考虑 file 模式（若官方支持）
+#
+# real_codex_like:
+#   extends: base_cli
+#   description: "Fill in after reading the official non-interactive docs."
+#   command: ""            # TODO: 官方文档给出的可执行文件名
+#   extra_args: []         # TODO: 官方文档给出的非交互模式开关
+#   prompt_mode: stdin     # TODO: 改成官方实际支持的方式
+#   prompt_argument: null  # TODO: prompt_mode 为 argument/file 时必填
+#   supports_session_resume: false   # TODO
+#   resume_argument: null            # TODO
+#   timeout_seconds: 600
+#
+# real_claude_like:
+#   extends: base_cli
+#   command: ""            # TODO
+#   extra_args: []         # TODO
+#   prompt_mode: stdin     # TODO
+#
+# real_cursor_like:
+#   extends: base_cli
+#   command: ""            # TODO
+#   extra_args: []         # TODO
+#   prompt_mode: stdin     # TODO
+#
+# real_zcode_like:
+#   extends: base_cli
+#   command: ""            # TODO
+#   extra_args: []         # TODO
+#   prompt_mode: stdin     # TODO

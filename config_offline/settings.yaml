@@ -1,0 +1,10 @@
+# 运行参数。与"谁来做"无关，只描述"怎么做"。
+
+max_rounds: 5                 # 硬上限，机制层面禁止无限循环
+runtime_dir: runtime          # 运行时文件根目录
+workspace_dir: workspace      # 未来 Shared Workspace（代码/产物）的根目录
+default_timeout_seconds: 300  # 单次 Agent 调用超时
+stop_on_execution_error: true # Executor 抛异常时是否立即终止（false 则视为一轮失败继续）
+verbose: true                 # 控制台输出
+write_pretty_json: true       # runtime/ 中的 JSON 是否缩进
+history_append_only: true     # history.jsonl 只追加，永不覆盖

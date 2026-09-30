@@ -1,0 +1,27 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["task_id", "round", "status", "summary", "changed_files", "commands_run", "tests", "errors", "remaining_issues"],
+  "properties": {
+    "task_id": {"type": "string"},
+    "round": {"type": "integer"},
+    "status": {"type": "string", "enum": ["success", "failed", "blocked"]},
+    "summary": {"type": "string"},
+    "changed_files": {"type": "array", "items": {"type": "string"}},
+    "commands_run": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["command", "exit_code"],
+        "properties": {
+          "command": {"type": "string"},
+          "exit_code": {"type": "integer"},
+          "output_excerpt": {"type": "string"}
+        }
+      }
+    },
+    "tests": {"type": "array", "items": {"type": "string"}},
+    "errors": {"type": "array", "items": {"type": "string"}},
+    "remaining_issues": {"type": "array", "items": {"type": "string"}}
+  }
+}

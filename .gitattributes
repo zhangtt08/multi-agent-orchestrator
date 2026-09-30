@@ -1,0 +1,55 @@
+# ===========================================================================
+# 行尾策略：仓库内一律 LF，检出也一律 LF
+# ===========================================================================
+#
+# 为什么这个项目不能靠 core.autocrlf：
+#   Windows 上 Git 的默认安装会把 core.autocrlf 设成 true，于是"检出得到 CRLF、
+#   提交时再归一化成 LF"。对多数仓库这无所谓，但本项目的多处判据是**按文件字节**
+#   算的：
+#     - mao/evidence.py 的源码快照与 git diff
+#     - mao/checkpoints/fingerprints.py 的 workspace 指纹
+#     - checkpoint 的 artifact SHA256 与 `checkpoint verify`
+#   一次全量 EOL 翻转会被这些判据读成"每个文件都被改写过"，
+#   表现为恢复时 WORKSPACE_MISMATCH -> BLOCKED，或 verify 报 hash 不符。
+#   一台机器的 git 配置不该能改变框架的事实判断，所以在这里钉死。
+#
+# 迁移时的实测：索引里 215 个文件全是 LF，工作树却有 51 个 CRLF ——
+# 差异纯由行尾造成（已逐文件比对 HEAD 确认），这正是漂移的来源。
+
+* text=auto eol=lf
+
+# ---------------------------------------------------------------------------
+# 二进制：永远不做行尾转换，也不许进 diff 统计
+# 当前跟踪的扩展名只有 py/yaml/md/txt/json/ini/gitignore，以下都是**防将来**：
+# 本项目的运行产物恰好就是这些类型（SQLite 队列库、FAISS 索引、模型权重），
+# 一旦被 git add 上去，静默的行尾转换会把它们直接写坏。
+# ---------------------------------------------------------------------------
+*.db binary
+*.sqlite binary
+*.sqlite3 binary
+*.faiss binary
+*.index binary
+*.bin binary
+*.safetensors binary
+*.onnx binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.zip binary
+*.gz binary
+*.pyc binary
+
+# ---------------------------------------------------------------------------
+# 明确保留文本语义的（避免被 text=auto 的自动判定误伤成 binary）
+# ---------------------------------------------------------------------------
+*.py text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.md text eol=lf
+*.json text eol=lf
+*.ini text eol=lf
+*.txt text eol=lf
+.gitignore text eol=lf

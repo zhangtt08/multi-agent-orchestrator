@@ -1,0 +1,22 @@
+# Harness Profile —— 真实 CLI Agent 的调用画像。
+#
+# 这份最小配置里的三个角色都是 Mock Adapter，**不经过命令行**，所以这里是空的。
+# 保留这个文件是因为它是配置目录契约的一部分（settings.yaml / agents.yaml /
+# harness.yaml 三份），`queue` 与 `scheduler` 子命令会按这个契约加载目录。
+#
+# 要在这里加真实 Harness，照 config/harness.yaml 的形态写一个 Profile：
+#
+#     my_agent_executor:
+#       command: "${MY_AGENT_PATH}"          # 绝对路径走环境变量，别写死本机路径
+#       prompt_mode: stdin
+#       extra_args: ["-p", "--permission-mode", "acceptEdits"]
+#       supports_cli: true
+#       supports_file_write: true
+#
+# 然后把 examples/config_minimal/agents.yaml 里某个角色的 provider 换掉、
+# 加上 harness_profile: my_agent_executor。
+# 顺序：写 Profile -> `python main.py providers` 看命令 -> 
+#       `python main.py doctor` 看权限与可执行文件 -> 
+#       `python tools/smoke_real_harness.py --dry-run` 看真实 argv。
+
+profiles: {}

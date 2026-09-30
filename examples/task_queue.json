@@ -1,0 +1,23 @@
+[
+  {
+    "goal": "calc.py 的 multiply(a, b) 错误地返回 a + b。改为返回 a * b，让 test_multiply 与 test_multiply_negative 通过。",
+    "constraints": ["只改 calc.py", "不要修改 test_calc.py"],
+    "workspace_path": "examples/calculator",
+    "priority": "HIGH",
+    "strategy": "GIT_WORKTREE"
+  },
+  {
+    "goal": "给 calc.py 增加 power(a, b) 函数（返回 a 的 b 次幂），并在新的 test_power.py 里为它写测试。不要改动已有函数的行为。",
+    "constraints": ["新增代码放在 calc.py 与新测试文件里", "保持现有测试仍然通过"],
+    "workspace_path": "examples/calculator",
+    "priority": "NORMAL",
+    "strategy": "GIT_WORKTREE"
+  },
+  {
+    "goal": "calc.py 的 divide 在除数为 0 时抛 ZeroDivisionError，但消息没有说明是哪个参数。把错误信息改成能指出哪个参数为 0，同时保持抛出的异常类型不变。",
+    "constraints": ["不得改变异常类型", "不得修改 test_calc.py"],
+    "workspace_path": "examples/calculator",
+    "priority": "LOW",
+    "strategy": "GIT_WORKTREE"
+  }
+]

@@ -1,0 +1,37 @@
+{
+  "name": "demo-calculator",
+  "workspace": "examples/calculator",
+  "strategy": "COPY",
+  "config_dir": "examples/config_minimal",
+  "max_rounds": 2,
+  "constraints": [
+    "不得修改 test_calc.py（那是验收基准）",
+    "不得引入新依赖"
+  ],
+  "final_acceptance": {
+    "name": "full-suite",
+    "command": ["pytest", "-q"]
+  },
+  "milestones": [
+    {
+      "id": "m1-multiply",
+      "goal": "修复 calc.py 中 multiply() 的 bug：应返回 a * b，当前错误地返回 a + b。只允许改 multiply() 这一处",
+      "acceptance": "pytest test_calc.py::test_multiply test_calc.py::test_multiply_negative -q",
+      "demo": {
+        "command": [
+          "python",
+          "-c",
+          "import calc, pathlib; pathlib.Path('demo.html').write_text('<h1>multiply(2,3)=' + str(calc.multiply(2,3)) + '</h1>', encoding='utf-8'); print('demo.html 已生成，看过之后再 accept')"
+        ]
+      }
+    },
+    {
+      "id": "m2-divide",
+      "goal": "给 calc.py 的 divide() 补一个测试：除数为 0 时抛出 ZeroDivisionError，并让整套测试通过",
+      "acceptance": "pytest test_calc.py -q",
+      "constraints": [
+        "新增测试写在 test_calc.py 之外，避免改动既有验收基准"
+      ]
+    }
+  ]
+}
