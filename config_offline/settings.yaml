@@ -8,3 +8,17 @@ stop_on_execution_error: true # Executor 抛异常时是否立即终止（false 
 verbose: true                 # 控制台输出
 write_pretty_json: true       # runtime/ 中的 JSON 是否缩进
 history_append_only: true     # history.jsonl 只追加，永不覆盖
+
+# ---------------------------------------------------------------------------
+# 队列隔离（地雷 24）。以前这里**没有** scheduler 段，于是 db_path 落到默认值
+# ./runtime_scheduler/queue.db —— 与 config/ 用的是同一个文件（实测 2026-09-29）。
+# 后果：用 `--config-dir config_offline` 提交的任务躺进**生产队列**，而它自己不跑
+# （enabled 才是唯一的差别）；下一次有人在 config/ 上开调度器就会去领这些离线演示
+# 任务 —— 真实角色、花额度，而它们的 workspace 可能早就是临时目录了。
+# 这一格只写"队列库与 attempt 根目录落在哪"，不改 enabled：离线档仍然不起调度层。
+# 目录名 runtime_offline 被 .gitignore 的 `/runtime_*/` 覆盖（根锚定，地雷 1）。
+# ---------------------------------------------------------------------------
+scheduler:
+  enabled: false
+  db_path: ./runtime_offline/queue.db
+  attempts_root: runtime_offline

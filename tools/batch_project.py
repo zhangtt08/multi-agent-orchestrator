@@ -52,7 +52,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
+import shlex
 import subprocess
 import sys
 import time
@@ -310,7 +312,18 @@ def goal_for(spec: Dict[str, Any], milestone: Dict[str, Any],
         # 里消失了，页面全英文、测试全绿、Reviewer 判 pass）。规划角色只有看到
         # 业主原话，才可能把它变成一条要评审的标准 —— 所以每次都给全文。
         text = f"项目总目标（业主原话）：{owner}\n\n本格要做的是：{text}"
-    text += f"\n验收命令：{str(milestone['acceptance']).strip()}，退出码 0 为通过。"
+    acceptance = str(milestone["acceptance"]).strip()
+    text += f"\n验收命令：{acceptance}，退出码 0 为通过。"
+    if ".ps1" in acceptance.lower():
+        # 2026-09-30 真实那一跑：执行者按里程碑要求写了 `tests/*.ps1`，文件是
+        # UTF-8 无 BOM，而 Windows PowerShell 5.1 按 GBK 解码它 —— 脚本里的中文
+        # 因此丢掉收尾引号，整份文件解析失败，本格 BLOCKED。判据本身没错，
+        # 错在我们没把"这台机器怎么读 .ps1"这件事告诉写文件的人（地雷 35：
+        # 限制留在判据上，动作搬回程序这一边）。
+        text += ("\n这一格的验收命令是 PowerShell 脚本：`.ps1` 必须存成 "
+                 "UTF-8 **带 BOM** —— Windows PowerShell 5.1 否则按 GBK 解码，"
+                 "脚本里的中文会让整份文件解析失败、退出码永远不是 0。"
+                 "能不写中文就别在脚本里写中文；或者换一条与编码无关的验收命令。")
     if constraints:
         text += "\n约束：" + "；".join(str(c) for c in constraints) + "。"
     mids = [str(m.get("id")) for m in spec.get("milestones") or []]
@@ -805,6 +818,48 @@ def run_demo(target: Dict[str, Any], workspace: str, echo=print,
     return result
 
 
+def run_milestone_acceptance(spec: Dict[str, Any], ms: Dict[str, Any],
+                             acceptance: str, echo=print) -> Optional[int]:
+    """框架**自己**跑一遍这一格的 acceptance，把退出码记进状态文件。
+
+    为什么这一条必须存在：acceptance 过去只是被写进给执行者的那段话里，"它通过
+    了没有"是 Reviewer 的一句结论 —— 结论不是机械事实（地雷 45）。2026-09-30
+    真实那一跑实测：Codex 按里程碑要求写了 `tests/*.ps1`，文件是 UTF-8 无 BOM，
+    而 Windows PowerShell 5.1 按 GBK 读它，中文字符串因此丢掉收尾引号 -> 整个脚本
+    解析失败；同时框架的验证清单里只有 Supervisor 计划的那条 `pytest`（exit 0）。
+    两份记录不是一套东西，闸门当时只能引用其中一份，于是"谁跑了什么"必须写清楚。
+
+    只记事实，不改判据的其余六条；**跑不起来记成 None，按"没成立"处理**，
+    绝不折成 0（那等于把一次 PATH 问题读成验收通过）。
+    """
+    acceptance = str(acceptance or "").strip()
+    ws = str(ms.get("execution_workspace") or spec.get("workspace") or "")
+    if not acceptance or not ws or not Path(ws).is_dir():
+        ms["acceptance_exit"] = None
+        ms["acceptance_note"] = ("没跑：这一格还没有可跑的验收命令，"
+                                 "或执行工作区不在" if not ws else
+                                 "没跑：执行工作区不在 —— 目录不在了")
+        echo("    验收命令：没跑（没有执行工作区）")
+        return None
+    argv = shlex.split(acceptance, posix=(os.name != "nt")) or [acceptance]
+    try:
+        proc = subprocess.run(argv, cwd=ws, capture_output=True, text=True,
+                              encoding="utf-8", errors="replace", timeout=900)
+    except (OSError, ValueError) as exc:
+        # 起不来不等于没通过（与 verify 同一句话，同一个理由）。
+        ms["acceptance_exit"] = None
+        ms["acceptance_note"] = f"起不来：{type(exc).__name__}: {exc}"[:200]
+        echo(f"    验收命令：起不来（{ms['acceptance_note']}）—— 这一格保持未确认")
+        return None
+    tail = "\n".join((proc.stdout or proc.stderr or "").strip()
+                     .splitlines()[-3:])
+    ms["acceptance_exit"] = proc.returncode
+    ms["acceptance_note"] = tail[:400]
+    echo(f"    验收命令：exit={proc.returncode} [框架] "
+         f"{(tail.splitlines() or ['-'])[-1][:80]}")
+    return proc.returncode
+
+
 def auto_merge_gate(spec: Dict[str, Any], state: Dict[str, Any],
                     ms: Dict[str, Any], view: Optional[Dict[str, Any]],
                     verdict: Optional[Dict[str, Any]]) -> List[str]:
@@ -846,6 +901,15 @@ def auto_merge_gate(spec: Dict[str, Any], state: Dict[str, Any],
                            f"{verdict['baseline_touched'][:4]}")
         for conflict in verdict["conflicts"]:
             reasons.append("事实冲突：" + str(conflict)[:200])
+    # 这里**不**把 `acceptance_exit` 加成第八条拒绝理由，故意的。
+    # 2026-09-30 真实那一跑之后试过：批次这一层直接 spawn 验收命令，遇到的是
+    # "裸 `pytest` 不在这个进程的 PATH 上"（地雷 10 —— 托管 venv 的 python 是跳板），
+    # 于是 `WinError 2 起不来` 被读成"验收没过"，把一份本来合格的交付判成失败格。
+    # 判据不可靠时当判据用，产出的不是更严的闸门，是一条永久的拒绝理由
+    # （地雷 31 的同型事故）。所以这一格现在的形状是：框架**记录**自己跑出来的
+    # 退出码并写进状态文件与交付说明，但合入仍然只认那七条能靠得住的机械判据。
+    # 要把它升格成判据，得先把"在哪一层、用哪套环境跑验收命令"这件事定下来 ——
+    # 那是 mao/ 里 VerificationRunner 的活，不是闸门里多一个 if。
     return reasons
 
 
@@ -865,6 +929,10 @@ def _report_ready(spec, state, target, ms, echo) -> None:
     ms["patch"] = patch
     ms["patch_sha256"] = _sha(Path(patch)) if patch else ""
     ms["execution_workspace"] = exec_ws
+    # 判据要问框架自己跑过的那一份（地雷 45 在合入闸门上的样子）：Reviewer 那句
+    # "验收脚本无法通过"是结论，框架自己的退出码才是事实。
+    run_milestone_acceptance(spec, ms, str(target.get("acceptance") or ""),
+                             echo=echo)
     save_state(spec, state)
     if patch:
         echo(f"    补丁：{patch}（{view['patch_lines']} 行，"
@@ -916,6 +984,61 @@ def _patch_paths(patch: Path) -> List[str]:
     return out
 
 
+def _diff_two_trees(source_ws: str, exec_ws: str) -> Tuple[str, List[str]]:
+    """COPY / DIRECT 的交接物：把执行工作区与落地目录逐文件比出一枚补丁。
+
+    为什么必须补这一段：`mao/workspaces/manager.py` 里生成 `changes.patch` 的那一段
+    在 `if plan.strategy == GIT_WORKTREE` 里面，于是 COPY（"非 git 项目"那一档）跑完
+    只有 `workspace_result.json` 里两个路径，没有任何可比对的差异 —— `accept` 因此
+    永远拿不到补丁，`recheck` 也只会回一句"只能手工把改动搬进源仓库"。
+    2026-09-30 真实那一跑撞上的正是这个形状：执行者把 `使用说明.md` 与两个 `.ps1`
+    都建出来了，Reviewer 也判了，最后一步却要人自己搬文件。
+
+    不改 core 的取证路径（那会让已经落盘的证据变得不可信 —— 地雷 22 的推论），
+    只在 recheck 这一层按同一把尺重新采一遍：`git diff --no-index`，不改索引、
+    不动工作区，退出码 1 表示"有差异"是正常结果。
+    补丁里的路径一律换回工作区相对路径，`git apply`（默认 -p1）才落在源仓库上。
+    """
+    from mao.workspaces.manager import _is_deliverable
+
+    src, dst = Path(str(source_ws)), Path(str(exec_ws))
+    if not dst.is_dir():
+        return "", []
+    names: List[str] = []
+    for p in sorted(dst.rglob("*")):
+        if not p.is_file():
+            continue
+        rel = p.relative_to(dst).as_posix()
+        if _is_deliverable(rel):
+            names.append(rel)
+
+    parts: List[str] = []
+    for rel in names:
+        target = dst / rel
+        origin = src / rel
+        left = str(origin) if origin.is_file() else "/dev/null"
+        proc = subprocess.run(
+            ["git", "diff", "--no-index", "--binary", "--", left, str(target)],
+            cwd=str(dst), capture_output=True, text=True,
+            encoding="utf-8", errors="replace")
+        text = proc.stdout or ""
+        if proc.returncode not in (0, 1) or not text.startswith("diff --git"):
+            continue
+        rebuilt: List[str] = []
+        for line in text.splitlines(keepends=True):
+            if line.startswith("diff --git "):
+                rebuilt.append(f"diff --git a/{rel} b/{rel}\n")
+            elif line.startswith("--- "):
+                rebuilt.append(line if line.startswith("--- /dev/null")
+                               else f"--- a/{rel}\n")
+            elif line.startswith("+++ "):
+                rebuilt.append(f"+++ b/{rel}\n")
+            else:
+                rebuilt.append(line)
+        parts.append("".join(rebuilt))
+    return "".join(parts), names
+
+
 def recheck(spec: Dict[str, Any], state: Dict[str, Any], echo=print) -> int:
     """对等待合入的那一格**重取证据**：执行工作区还在，记下来的补丁却不能用。
 
@@ -955,42 +1078,78 @@ def recheck(spec: Dict[str, Any], state: Dict[str, Any], echo=print) -> int:
             old_patch = Path(str(view["patch"]))
     rec = old_patch.parent / "workspace_result.json"
     if not rec.is_file():
+        # 判红的那一格常常连补丁路径都没记过 —— 那就去框架自己的产物目录找，
+        # 不在这里拼路径（拼错了会把"没取证"读成"取证为空"）。
+        from tools import delivery_view as dv0
+        rt0 = str(ms.get("runtime_task_id") or "")
+        dirs = (dv0.collect(rt0, str(spec.get("config_dir") or "config"))[0]
+                or {}).get("attempt_dirs") if rt0 else None
+        for d in (dirs or []):
+            candidate = Path(d) / "artifacts" / "workspace_result.json"
+            if candidate.is_file():
+                rec = candidate
+                break
+    if not rec.is_file():
         echo(f"读不到取证记录：{rec}\n"
-             "   这一格可能压根没走到采证（COPY/DIRECT 不产 diff），"
-             "那就只能手工把改动搬进源仓库再 advance。")
+             "   这一格没走到采证，而状态里也没有执行工作区的记录 —— "
+             "没有可比的现场就不造补丁，别合。")
         return 2
     try:
         recorded = json.loads(rec.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         echo(f"取证记录读坏了：{exc}")
         return 2
-    exec_ws = str(recorded.get("execution_workspace_path") or "")
-    if recorded.get("workspace_strategy") != "GIT_WORKTREE" or not exec_ws:
-        echo(f"这一格策略是 {recorded.get('workspace_strategy')}，"
-             "没有可比对的 worktree 差异可重取。")
+    exec_ws = str(recorded.get("execution_workspace_path")
+                  or ms.get("execution_workspace") or "")
+    strategy = str(recorded.get("workspace_strategy") or "")
+    if not exec_ws:
+        echo("记录里没有执行工作区的路径 —— 没东西可比对，别合。")
         return 2
     if not Path(exec_ws).is_dir():
         echo(f"执行工作区已经不在了：{exec_ws}\n   证据没了就重建不了补丁，别合。")
         return 2
 
-    from mao.workspaces.manager import (WorkspacePlan,  # noqa: E402
-                                        WorkspaceStrategyManager)
-    from mao.workspaces.strategies import WorkspaceStrategy  # noqa: E402
-
     rt = str(ms.get("runtime_task_id") or "rt")
-    plan = WorkspacePlan(
-        strategy=WorkspaceStrategy(recorded["workspace_strategy"]),
-        source_workspace_path=str(spec["workspace"]),
-        execution_workspace_path=exec_ws,
-        base_revision=str(recorded.get("base_revision") or ""),
-        workspace_id=rt)
     out_dir = STATE_DIR / str(spec["name"]) / "recheck" / rt
-    try:
-        fresh = WorkspaceStrategyManager(
-            worktree_root=ROOT / "runtime_worktrees").collect_result(plan, out_dir)
-    except Exception as exc:  # noqa: BLE001 - 重取失败就不动这一格
-        echo(f"重新取证失败，记录未改动：{exc}")
-        return 1
+    if strategy == "GIT_WORKTREE":
+        from mao.workspaces.manager import (WorkspacePlan,  # noqa: E402
+                                            WorkspaceStrategyManager)
+        from mao.workspaces.strategies import WorkspaceStrategy  # noqa: E402
+
+        plan = WorkspacePlan(
+            strategy=WorkspaceStrategy(recorded["workspace_strategy"]),
+            source_workspace_path=str(spec["workspace"]),
+            execution_workspace_path=exec_ws,
+            base_revision=str(recorded.get("base_revision") or ""),
+            workspace_id=rt)
+        try:
+            fresh = WorkspaceStrategyManager(
+                worktree_root=ROOT / "runtime_worktrees").collect_result(
+                    plan, out_dir)
+        except Exception as exc:  # noqa: BLE001 - 重取失败就不动这一格
+            echo(f"重新取证失败，记录未改动：{exc}")
+            return 1
+    else:
+        # COPY / DIRECT：没有 worktree 可比对，就把两个目录逐文件比出来。
+        # 以前这里只回一句"那就只能手工把改动搬进源仓库"，于是新建的项目
+        # 跑完、判据也齐，最后一步永远要人动手 —— 地雷 35 说动作该搬回程序这边。
+        echo(f"这一格策略是 {strategy}：按落地目录与执行工作区的差异重取（不碰源仓库）。")
+        try:
+            out_dir.mkdir(parents=True, exist_ok=True)
+            text, names = _diff_two_trees(str(spec["workspace"]), exec_ws)
+            new_patch = out_dir / "changes.patch"
+            new_patch.write_text(text, encoding="utf-8")
+            (out_dir / "workspace_result.json").write_text(json.dumps({
+                "workspace_strategy": strategy,
+                "execution_workspace_path": exec_ws,
+                "base_revision": str(recorded.get("base_revision") or ""),
+                "changed_files": names,
+                "changes_patch": str(new_patch)},
+                ensure_ascii=False, indent=2), encoding="utf-8")
+            fresh = {"changes_patch": str(new_patch), "changed_files": names}
+        except OSError as exc:
+            echo(f"重新取证失败，记录未改动：{exc}")
+            return 1
 
     new_patch = Path(fresh["changes_patch"])
     before_lines = 0
@@ -1303,6 +1462,16 @@ def all_done(spec: Dict[str, Any], state: Dict[str, Any]) -> bool:
                for m in spec["milestones"])
 
 
+def _acceptance_evidence(ms: Dict[str, Any]) -> str:
+    """这一格验收命令的框架实测结论 —— 没跑过就写没跑过，不留空也不编。"""
+    if "acceptance_exit" not in ms:
+        return ""
+    code = ms.get("acceptance_exit")
+    if code is None:
+        return f"（框架实测：没跑成 —— {str(ms.get('acceptance_note') or '')[:80]}）"
+    return f"（框架实测 exit={code}）"
+
+
 def write_delivery(spec: Dict[str, Any], state: Dict[str, Any]) -> Path:
     """把这一批的交付面写成一份能直接读的 DELIVERY.md —— 无人值守的"结果"。
 
@@ -1339,7 +1508,12 @@ def write_delivery(spec: Dict[str, Any], state: Dict[str, Any]) -> Path:
             f"| {sha[:12] or '没有记录'} "
             f"| {commit[:12] or '没有记录'} "
             f"| {str(ms.get('accepted_by') or '没有记录')} "
-            f"| `{str(m['acceptance'])[:60]}` |")
+            f"| `{m['acceptance']}`"
+            # 这一格是框架自己 spawn 出来的那一个数（`run_milestone_acceptance`）。
+            # 交付说明以前把验收命令截到 60 字符，于是表里出现 `tests/te` 这种
+            # 根本不存在的路径 —— 一份证据文档不能印一个查不到的命令（实测于
+            # 2026-09-30 真实那一跑的 DELIVERY.md）。跑不成时写"没跑成"而不是留空。
+            f"{_acceptance_evidence(ms)} |")
         if demo.get("status"):
             lines.append(f"| ↳ demo | {demo.get('status')} "
                          f"| exit={demo.get('exit_code', '没有记录')} | | | | |")

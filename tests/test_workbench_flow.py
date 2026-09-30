@@ -355,6 +355,28 @@ class TestHttpRoutes:
         except urllib.error.HTTPError as exc:
             return exc.code, exc.read().decode("utf-8"), url
 
+    def test_the_root_lands_on_the_place_where_you_type(self, server):
+        """业主原话："现在的软件上手根本不知道从哪里做起"。
+
+        根路径以前落在仪表盘 —— 那一页没有提示词框、没有落地目录、也没有
+        『建仓库并开工』，第一眼是"进行中 0"。现在打开就是能打字那一格，
+        而仪表盘没有因此失联（导航那一格仍在 `/ui`）。
+        """
+        import re
+
+        import urllib.request
+
+        with urllib.request.urlopen(server + "/") as r:
+            body = r.read().decode("utf-8")
+            assert r.geturl().endswith("/ui/tasks"), r.geturl()
+        # 判据是"那一页真的有一个可以打字的地方"，不是某个标签的措辞。
+        assert re.search(r"<textarea[^>]*name=['\"]goal['\"]", body), body[:400]
+
+        with urllib.request.urlopen(server + "/ui") as r:
+            dash = r.read().decode("utf-8")
+        assert "仪表盘" in dash
+
+
     def test_flow_page_serves_over_http(self, server, cfg):
         import urllib.request
 

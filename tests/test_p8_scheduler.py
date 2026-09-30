@@ -550,7 +550,34 @@ class TestMetrics:
         assert m["stale_recoveries"] == 1
 
 
+class TestOfflineQueueIsIsolated:
+    """地雷 24：离线演示档曾与生产档共用同一个 queue.db。
+
+    `config_offline/settings.yaml` 以前根本没有 scheduler 段，于是 db_path 落到
+    默认值 `./runtime_scheduler/queue.db` —— 与 `config/` 一模一样，差别只有
+    `enabled=False`。后果是"用离线档提交的任务躺进生产队列，自己不跑"，
+    而下一次有人在 config/ 上开调度器就会去领它们：真实角色、花额度，
+    workspace 可能早就是临时目录了。这正是"任务看起来消失了"那一格。
+    """
+
+    def _db(self, config_dir: str) -> Path:
+        from mao.core import load_config
+
+        return Path(load_config(config_dir).settings.scheduler.db_path).resolve()
+
+    def test_the_two_configs_never_share_one_queue_file(self):
+        prod, offline = self._db("config"), self._db("config_offline")
+        assert prod != offline, f"两份配置指向同一个队列库：{prod}"
+
+    def test_offline_tier_still_does_not_start_a_scheduler(self):
+        """隔离不能顺手把离线档变成会跑的档 —— 那是另一种"没人知道有东西在排队"。"""
+        from mao.core import load_config
+
+        assert load_config("config_offline").settings.scheduler.enabled is False
+        assert load_config("config").settings.scheduler.enabled is True
+
+
 __all__ = ["TestModels", "TestMigration", "TestSubmission", "TestOrdering",
            "TestLease", "TestRecovery", "TestControlRequests",
            "TestOutcomeMapper", "TestFailureClassification", "TestRetryPolicy",
-           "TestCapacity", "TestMetrics"]
+           "TestCapacity", "TestMetrics", "TestOfflineQueueIsIsolated"]

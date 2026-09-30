@@ -234,16 +234,30 @@ def _stub_repo(calls):
 
 class TestHttpShell:
     def test_input_box_lives_on_the_tasks_page(self, server):
+        """输入面只有一处：任务那一格。根路径不是第二份表单，而是走过去的那扇门。
+
+        这条原来锁的是"首页=仪表盘、首页上没有表单"—— 表单只许有一处，避免同一个
+        判断各写一遍。业主那句"现在的软件上手根本不知道从哪里做起"改了**落地页**
+        的选择：`/` 现在重定向到任务那一格。不变的是仍然只有一处表单，所以判据
+        从"首页里不能有表单"改成"仪表盘里不能有第二份表单"—— 放宽的是路由，
+        没有放宽那条真正要紧的约束。
+        """
         base, ctx, httpd, _ = server
         with urllib.request.urlopen(base + "/ui/tasks") as resp:
             page = resp.read().decode("utf-8")
         assert resp.status == 200
         assert "name='goal'" in page, "输入需求的地方不见了"
         assert "action='/submit'" in page
-        with urllib.request.urlopen(base + "/") as dash:
+
+        with urllib.request.urlopen(base + "/") as landing:
+            landed = landing.read().decode("utf-8")
+            assert landing.geturl().endswith("/ui/tasks"), landing.geturl()
+        assert "127.0.0.1" in landed, "监听范围要写在人落地的那一页上"
+
+        with urllib.request.urlopen(base + "/ui") as dash:
             d = dash.read().decode("utf-8")
-        assert "仪表盘" in d and "name='goal'" not in d, "首页应是仪表盘，不是表单"
-        assert "127.0.0.1" in d, "监听范围要写在首页上"
+        assert "仪表盘" in d and "name='goal'" not in d, "仪表盘不许长出第二份表单"
+        assert "127.0.0.1" in d, "监听范围也要写在仪表盘上"
         del ctx, httpd
 
     def test_post_without_origin_is_refused(self, server):

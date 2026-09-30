@@ -1221,7 +1221,16 @@ def make_handler(bound_ctx: Workbench):
             url = urlparse(self.path)
             query = parse_qs(url.query)
             path = url.path
-            if path in ("/", "/ui"):
+            if path == "/":
+                # 打开应用的人想做的是"说一句话"，不是看统计。业主原话是
+                # "现在的软件上手根本不知道从哪里做起" —— 而根路径以前落在仪表盘，
+                # 那一页没有提示词框、没有落地目录、也没有『建仓库并开工』，
+                # 人第一眼看到的是一堆"进行中 0"。落地页因此改成任务那一格：
+                # 提示词、落地目录、建仓库按钮、以及"调用哪个 agent / 这里不用填
+                # API key"都在同一页上（地雷 35 的同一判断：答案要在第一屏）。
+                self._redirect("/ui/tasks")
+                return
+            if path == "/ui":
                 from tools import workbench_ui as ui
 
                 self._html(ui.dashboard(self.ctx))

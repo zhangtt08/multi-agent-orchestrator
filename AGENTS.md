@@ -173,7 +173,7 @@ Agent 自述  执行者说它做了什么 —— 只是供述
     clean/smudge 后的内容判），不要用 sha256(bytes)。
     同一条坑也解释了为什么本仓库的 `git ls-files --eol | grep w/crlf` 是必查项。
 
-24. **`config_offline` 与生产档共用同一个队列库**（实测 2026-09-29）：它的
+24. **`config_offline` 与生产档共用同一个队列库**（实测 2026-09-29；**2026-09-30 已修**）：它的
     `settings.yaml` 根本没有 scheduler 段，于是 `db_path` 落到默认值
     `./runtime_scheduler/queue.db` —— 和 `config/` 一模一样。差别只有
     `enabled=False`。后果：**用 `--config-dir config_offline` 提交的任务会躺进
@@ -181,7 +181,14 @@ Agent 自述  执行者说它做了什么 —— 只是供述
     在 `config/` 上开调度器，就会去领这些"离线演示"任务 —— 用真实角色、花额度，
     而它们的 workspace 可能早就是临时目录了。这正是地雷 18 的镜像：不是没人停，
     是没人知道有东西在排队。
-    要零配额演示请用 `examples/config_minimal`（它有自己的
+    现在的形状：`config_offline/settings.yaml` 自带 `scheduler:` 段，
+    `db_path: ./runtime_offline/queue.db` + `attempts_root: runtime_offline`，
+    而 **`enabled` 仍然是 false** —— 隔离不能顺手把离线档变成会跑的档，
+    那是另一种"没人知道有东西在排队"。目录名落在 `.gitignore` 已有的
+    `/runtime_*/` 里（根锚定，见第 1 条）。回归
+    `tests/test_p8_scheduler.py::TestOfflineQueueIsIsolated` 两条：
+    两份配置解析出的队列库路径不许相同；离线档的 `enabled` 不许被顺手打开。
+    要零配额演示请仍然优先用 `examples/config_minimal`（它有自己的
     `runtime/example/queue.db` 与 attempts_root，是真隔离）。
     误提交后的清理：`python main.py queue cancel <rt> --config-dir config_offline`
     （按队列库看残留：`select runtime_task_id,status from runtime_tasks`）。
@@ -290,6 +297,12 @@ Agent 自述  执行者说它做了什么 —— 只是供述
     （`workbench_ui.agent_strip`，可执行文件走 `resolve_profile_command` 同一个入口，
     不写第二套发现逻辑）。这两个答案过去一直躺在 配置 页里，而人停在 任务 页 ——
     找不到下一步比没有下一步更难。
+    **同一格的后续（2026-09-30 本机实测）**：根路径 `/` 当时落在**仪表盘**，而那一页
+    没有提示词框、没有落地目录、也没有『建仓库并开工』—— 打开软件第一眼是"进行中 0"。
+    这正是业主那句"现在的软件上手根本不知道从哪里做起"的形状。现在 `/` 直接落到任务
+    那一格（仪表盘仍在 `/ui`，导航没失联）。回归把判据钉在"落地页真的有
+    `<textarea name=goal>` 可以打字"，不是"页面上出现了某个词"：
+    `tests/test_workbench_flow.py::TestHttpRoutes::test_the_root_lands_on_the_place_where_you_type`。
     **同一轮里最贵的一条发现**：业主那台机器上三个角色全绑 codex，而
     `codex login status` 回的是 "Not logged in" —— 之前文档写着"登录态只能由一次
     成功的真实调用证明"，于是软件宁可让人点一次、烧一次调用、再在执行那步失败，
@@ -482,6 +495,40 @@ Agent 自述  执行者说它做了什么 —— 只是供述
     地雷 45 说判据要问框架记录，那**测试就得造出那份记录**，缺它时页面判"未确认"是对的。
     推论：看见"页面说的和测试要的不一样"，先分清是判据错还是现场没造出来；
     把断言改松得到的只是没有判据的构建（见本文件末尾那条）。
+
+48. **COPY / DIRECT 这一档以前根本没有交接物**（2026-09-30 真实那一跑，已修）。
+    `mao/workspaces/manager.py` 里生成 `changes.patch` 的那一段写在
+    `if plan.strategy == GIT_WORKTREE` 里面，于是 COPY 跑完 `workspace_result.json`
+    只有两个路径、没有改动清单也没有补丁。`recheck` 原来的话是
+    "那就只能手工把改动搬进源仓库再 advance" —— 那就是地雷 35 说的那道墙：
+    判据成立，但下一步是人的终端作业。现场：执行者把 `使用说明.md` 与两个 `.ps1`
+    都建出来了，demo 也 exit 0，最后一步要人搬文件。
+    现在 `batch_project._diff_two_trees()` 用同一把尺（`git diff --no-index`，
+    不改索引、不动工作区、退出码 1 是"有差异"）把落地目录与执行工作区逐文件比出来，
+    补丁头里的路径统一换成工作区相对路径（`git apply` 默认 -p1 才落在源仓库上），
+    只写到 `runtime_batch/<项目>/recheck/`，原证据目录一个字节不动（地雷 22）。
+    **不动 core 的取证路径是有意的**：那会让已经落盘的证据变得不可信。
+    闸门守卫因此升级而不是放宽：`test_only_accept_touches_the_repo` 现在把
+    `diff --no-index` 认成只读动词（它不进任何仓库），而**裸 `git diff` 仍然红**
+    —— 已当场用一段假 AST 证过。
+    同一条路上另外三件事：
+    ① `acceptance_exit` **没有**被加成第八条拒绝理由。试过：批次这一层 spawn 验收
+    命令撞上"裸 `pytest` 不在这个进程 PATH 上"（地雷 10），`WinError 2 起不来`
+    被读成"验收没过"，把本来合格的交付判成失败格 —— 判据不可靠时当判据用，
+    产出的是一条永久的拒绝理由（地雷 31 同型）。现在框架**记录**退出码并写进
+    `DELIVERY.md`，合入仍只认那七条靠得住的。要升格，先得把"在哪一层、用哪套环境
+    跑验收命令"定下来 —— 那是 `VerificationRunner` 的活。
+    ② 里程碑 acceptance 写成 PowerShell 脚本时，**执行者写的 `.ps1` 是 UTF-8 无 BOM，
+    而 Windows PowerShell 5.1 按 GBK 读**，中文字符串因此丢掉收尾引号 -> 整个脚本
+    解析失败。Reviewer 判 BLOCKED 是对的（它是照自己那一份结论说的，不是机械事实）。
+    这条还没修：要么让取证那一层用 `pwsh`/带 BOM 的写法，要么在计划层就别把
+    `.ps1` 当验收载体 —— 判据要落在框架能跑的那一侧。
+    ③ `DELIVERY.md` 把验收命令截到 60 字符，表里因此印出 `tests/te` 这种**根本不存在的
+    路径**（实测）。证据文档不许印一个查不到的命令，现在写全文 + 框架实测结论。
+    ④ 还有一条**不是 bug 的结果**值得记住：真实那一格的产出是诚实但没用的 ——
+    执行者照着里程碑那句"核对 README.md"写了满篇"README.md 对…没有记录"，
+    因为落地目录的 README 本来就没写 MAO 怎么用。目标那句话把验收面指错了地方，
+    软件就老实把"查不到"交付出来。放宽限制不在此列，这是**提示词的形状问题**。
 
 ## 配额与证据纪律
 

@@ -737,12 +737,7 @@ def dashboard(ctx) -> str:
                 f"<div class='row'><a href='/run/{rt}"
                 f"?config={html.escape(config_dir)}'>看完整判据 →</a></div>")
     body.append("</div>")
-    body.append(
-        "<div class='note' style='margin-top:14px'>当前 config <b>"
-        f"{html.escape(config_dir)}</b> · 只监听 127.0.0.1（别的机器连不上）· 队列 "
-        f"<span class='mono'>"
-        f"{html.escape(str(dv.queue_db_path(config_dir) or '（还没有队列库）'))}"
-        f"</span> · <a href='/classic'>纯文本版</a></div>")
+    body.append(scope_note(config_dir))
     body.append("</div></div>")
     return page("仪表盘", "dashboard", body,
                 blurb="Monitor your agents, tasks and deliveries")
@@ -1114,6 +1109,24 @@ def workflow(ctx, notice: str = "", bad: bool = False) -> str:
                 blurb="两个 agent 的过程与方向控制")
 
 
+def scope_note(config_dir: str) -> str:
+    """"这份面板听在哪、读的是哪个队列库" —— 一行，两处共用。
+
+    根路径改成落到任务那一格之后，这句话必须跟着人**真正落地的那一页**走：
+    监听范围写在看不见的地方等于没写。判据在
+    `tests/test_workbench.py::TestHttpShell::test_input_box_lives_on_the_tasks_page`。
+    """
+    import html
+
+    from tools import delivery_view as dv
+
+    return ("<div class='note' style='margin-top:14px'>当前 config <b>"
+            f"{html.escape(str(config_dir))}</b> · 只监听 127.0.0.1（别的机器连不上）"
+            " · 队列 <span class='mono'>"
+            f"{html.escape(str(dv.queue_db_path(config_dir) or '（还没有队列库）'))}"
+            "</span> · <a href='/classic'>纯文本版</a></div>")
+
+
 def tasks(ctx, notice: str = "", bad: bool = False) -> str:
     import html
 
@@ -1196,6 +1209,7 @@ def tasks(ctx, notice: str = "", bad: bool = False) -> str:
                 "<span class='mono'>awaiting-merge</span> 等你 "
                 "<span class='mono'>accept --yes</span>。"
                 "两条路都只有一条门：<span class='mono'>accept()</span>。</div>")
+    body.append(scope_note(ctx.config_dir))
     return page("任务", "tasks", body)
 
 

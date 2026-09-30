@@ -244,17 +244,26 @@ class TestMergeNeedsAHuman:
                         and first.elts[0].value == "git"
                         and len(first.elts) > 1
                         and isinstance(first.elts[1], ast.Constant)):
-                    verbs.append(str(first.elts[1].value))
+                    verb = str(first.elts[1].value)
+                    literals = [str(e.value) for e in first.elts
+                                if isinstance(e, ast.Constant)]
+                    # `diff --no-index` 记成它自己，不并入 `diff`：
+                    # 那一支比较的是两个路径，根本不进入任何仓库（不读 .git、
+                    # 不碰索引、不动工作区），因此它不是"改仓库的动词"。
+                    if verb == "diff" and "--no-index" in literals:
+                        verb = "diff --no-index"
+                    verbs.append(verb)
             if verbs:
                 found.setdefault(fn.name, []).extend(verbs)
         return found
 
     def test_only_accept_touches_the_repo(self):
         calls = self._git_calls_by_function()
+        read_only = {"rev-parse", "diff --no-index"}
         for fn, verbs in calls.items():
             if fn == "accept":
                 continue
-            assert set(verbs) == {"rev-parse"}, (
+            assert set(verbs) <= read_only, (
                 f"{fn} 里出现了改仓库的 git 动词 {verbs} —— 除 accept 之外"
                 "任何路径都不许动源仓库")
         assert set(calls.get("accept", [])) & {"apply", "commit"}, \
@@ -949,6 +958,103 @@ class TestFailedSliceIsNotADeadEnd:
         assert "run --retry m1" in out
 
 
+class TestRecheckForCopyMilestones:
+    """地雷 48：COPY / DIRECT 这一档也得有交接物，不然最后一步永远是人的活。"""
+
+    def _copy_workspace(self, repo, rt="rt-copy"):
+        """COPY 那一档的现场：执行工作区是一目录副本，框架没产补丁、只记了路径。
+
+        2026-09-30 真实那一跑的形状 —— `workspace_result.json` 里只有
+        `workspace_strategy` / `execution_workspace_path` / `base_revision`，
+        没有 `changed_files` 也没有 `changes_patch`，于是 `accept` 永远拿不到
+        交接物，`recheck` 只回一句"只能手工把改动搬进源仓库"。
+        """
+        import subprocess
+
+        exec_ws = repo.parent / f"{repo.name}-exec-{rt}"
+        (exec_ws / "tests").mkdir(parents=True, exist_ok=True)
+        (exec_ws / "使用说明.md").write_text("# 开始使用\n\n真内容\n",
+                                             encoding="utf-8")
+        (exec_ws / "index.html").write_text("<html>new</html>\n",
+                                            encoding="utf-8")
+        # 缓存不是交付物（地雷 45 的 ①：一条 .pyc 曾把合格交付顶成"事实冲突"）
+        (exec_ws / "tests" / "__pycache__").mkdir(exist_ok=True)
+        (exec_ws / "tests" / "__pycache__" / "x.cpython-312.pyc").write_bytes(
+            b"\x00fake")
+        arts = repo / "arts" / rt
+        (arts / "artifacts").mkdir(parents=True, exist_ok=True)
+        (arts / "artifacts" / "workspace_result.json").write_text(
+            json.dumps({"workspace_strategy": "COPY",
+                        "execution_workspace_path": str(exec_ws),
+                        "base_revision": ""}, ensure_ascii=False),
+            encoding="utf-8")
+        # 落地目录里已有一个同名文件 —— 那一支要走"改动"而不是"新增"
+        (repo / "index.html").write_text("<html>old</html>\n", encoding="utf-8")
+        subprocess.run(["git", "add", "index.html"], cwd=str(repo),
+                       capture_output=True)
+        subprocess.run(["git", "-c", "user.name=t", "-c",
+                        "user.email=t@example.com", "commit", "-q", "-m", "base"],
+                       cwd=str(repo), capture_output=True)
+        return exec_ws, arts
+
+    def test_recheck_produces_a_patch_for_a_copy_milestone_and_it_applies(
+            self, repo, capsys):
+        """COPY 也得有交接物：比两个目录，产出一枚源仓库能 apply 的补丁。"""
+        import subprocess
+
+        spec = bp.load_spec(write_spec(repo, strategy="COPY", milestones=[
+            {"id": "m1", "goal": "创建一份 使用说明.md，写清怎么开工、角色绑在哪、交付物在哪",
+             "acceptance": "pytest -q"}]))
+        state = bp.load_state(spec)
+        exec_ws, arts = self._copy_workspace(repo)
+        missing = arts / "artifacts" / "changes.patch"
+        ms = bp.milestone_state(state, "m1")
+        ms.update(status="awaiting-merge", runtime_task_id="rt-copy",
+                  patch=str(missing), patch_sha256=bp._sha(missing),
+                  execution_workspace=str(exec_ws), base_before=bp.head(repo))
+        bp.save_state(spec, state)
+
+        assert bp.recheck(spec, bp.load_state(spec)) == 0
+        out = capsys.readouterr().out
+        assert "这一格策略是 COPY" in out, out
+
+        after = bp.load_state(spec)["milestones"]["m1"]
+        text = Path(after["patch"]).read_text(encoding="utf-8")
+        assert "+<html>new</html>" in text, text        # 改动带上下文，不是空补丁
+        assert "使用说明.md" in text, text               # 中文文件名不许被丢掉
+        assert "__pycache__" not in text, text
+        assert after["patch"] != str(missing)           # 只新增，原证据目录不动
+
+        # 判据不是"看起来像补丁"，而是源仓库能 apply 上它
+        check = subprocess.run(["git", "apply", "--check", after["patch"]],
+                               cwd=str(repo), capture_output=True, text=True)
+        assert check.returncode == 0, check.stderr
+
+    def test_recheck_copy_refuses_without_the_execution_dir(self, repo, capsys):
+        """执行工作区没了就是没了 —— 别造一枚看起来能用的补丁。"""
+        spec = bp.load_spec(write_spec(repo, strategy="COPY", milestones=[
+            {"id": "m1", "goal": "创建一份 使用说明.md，写清怎么开工、角色绑在哪、交付物在哪",
+             "acceptance": "pytest -q"}]))
+        state = bp.load_state(spec)
+        _exec_ws, arts = self._copy_workspace(repo, rt="rt-gone")
+        gone = str(repo.parent / "never-exists")
+        # 判据读的是**记录里**那一个路径（状态文件只是副本），所以要让记录本身
+        # 指向一个已经不存在的目录 —— 否则测的是"状态被改坏"而不是"现场没了"。
+        (arts / "artifacts" / "workspace_result.json").write_text(
+            json.dumps({"workspace_strategy": "COPY",
+                        "execution_workspace_path": gone,
+                        "base_revision": ""}, ensure_ascii=False),
+            encoding="utf-8")
+        ms = bp.milestone_state(state, "m1")
+        ms.update(status="awaiting-merge", runtime_task_id="rt-gone",
+                  patch=str(arts / "artifacts" / "changes.patch"),
+                  execution_workspace=gone, base_before=bp.head(repo))
+        bp.save_state(spec, state)
+
+        assert bp.recheck(spec, bp.load_state(spec)) == 2
+        assert "已经不在了" in capsys.readouterr().out
+
+
 class TestRecheck:
     """重取证据：收集器修好之后，已跑完的那一格还得有一条把补丁重建出来的路。
 
@@ -1244,6 +1350,25 @@ class TestGoalCarriesTheChecklist:
     def test_no_owner_goal_keeps_the_text_as_before(self):
         spec = self._spec()
         assert "业主原话" not in bp.goal_for(spec, spec["milestones"][0])
+
+    def test_a_powershell_acceptance_carries_the_encoding_constraint(self):
+        """地雷 48 的 ②：真实那一格因为 `.ps1` 编码被 BLOCKED，而写文件的人没人告诉它。
+
+        Windows PowerShell 5.1 按 GBK 解码无 BOM 的 `.ps1`，脚本里的中文因此丢掉
+        收尾引号 -> 整份文件解析失败 -> 验收退出码永远不是 0。判据没错，缺的是
+        把机器约束交给执行者那一句（限制留在判据上，动作搬回程序这一边）。
+        """
+        spec = self._spec()
+        spec["milestones"][0]["acceptance"] = (
+            "powershell -NoProfile -File tests/test_start.ps1")
+        text = bp.goal_for(spec, spec["milestones"][0])
+        assert "UTF-8 **带 BOM**" in text, text
+        assert "解析失败" in text, text
+
+    def test_a_python_acceptance_does_not_carry_the_powershell_note(self):
+        """不该说的话别说 —— 给执行者的文本读起来要像人写的，不是像说明书。"""
+        spec = self._spec()
+        assert "带 BOM" not in bp.goal_for(spec, spec["milestones"][1])
 
     def test_save_state_carries_the_owner_words_into_the_state_file(self, repo):
         """面板读的是状态文件。原话只留在 spec 里，核查那一格就永远印不出原话。
