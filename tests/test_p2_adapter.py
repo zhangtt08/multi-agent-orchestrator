@@ -52,11 +52,12 @@ class RecordingTransport:
 
     def __init__(self, stdout: str = '{"task_id": "t1", "round": 1}',
                  exit_code: int = 0, timed_out: bool = False,
-                 raises: Exception | None = None):
+                 raises: Exception | None = None, stderr: str = ""):
         self.stdout = stdout
         self.exit_code = exit_code
         self.timed_out = timed_out
         self.raises = raises
+        self.stderr = stderr
         self.invocations: list = []
         self.call_ids: list = []
 
@@ -69,7 +70,7 @@ class RecordingTransport:
         return ProcessResult(
             exit_code=self.exit_code,
             stdout=self.stdout,
-            stderr="",
+            stderr=self.stderr,
             started_at=now,
             finished_at=now,
             duration_ms=7,
@@ -185,6 +186,26 @@ def test_run_records_timed_out_flag():
     transport = RecordingTransport(stdout="", timed_out=True)
     response = make_adapter(transport).run(make_request())
     assert response.timed_out is True
+
+
+def test_a_failed_call_keeps_the_clis_stderr_in_the_error_text():
+    """退出码不是一个判据 —— 它说不出为什么。
+
+    真实那一跑（2026-09-30）：`codex exec` 作为 supervisor 退出码 1、stdout
+    一个字都没有，于是 `raw_excerpt` 也是空的，现场只剩
+    "agent exited with code 1, allowed=[0]"。CLI 的错误写在 **stderr** 上，
+    而 adapter 那句 `error=f"{type}: {exc.message}"` 里没有它 ——
+    紧挨着的那行注释早就写了"把 stdout/stderr/exit_code 全带上"，代码没做到。
+    要排查这种失败只能重跑一次、再花一次额度（地雷 44）。
+    """
+    transport = RecordingTransport(
+        stdout="", exit_code=1,
+        stderr="error: you are out of included messages on your ChatGPT plan")
+    resp = make_adapter(transport=transport).run(make_request())
+
+    assert resp.ok is False
+    assert "exited with code 1" in (resp.error or ""), resp.error
+    assert "out of included messages" in (resp.error or ""), resp.error
 
 
 # ---------------------------------------------------------------------------

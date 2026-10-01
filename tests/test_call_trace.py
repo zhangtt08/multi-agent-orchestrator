@@ -48,6 +48,19 @@ class TestInvalidCallKeepsRaw:
         assert extra["memory_ids_used"] == ["MEM-1"]
         assert extra["raw_excerpt"] == "x"
 
+    def test_a_cli_stderr_tail_survives_the_record_cap(self):
+        """CLI 的原因写在错误消息的后半段，记录的上限不能把它切没。
+
+        地雷 49：适配器把 stderr 接在 `error` 这句话后面之后，`response_error`
+        若仍截到 400，落进 `agent_calls.jsonl` 的还是那句"exited with code 1" ——
+        等于修了上游、断了下游。这条断言的是**尾巴**，不是前缀。
+        """
+        reason = ("AgentExecutionError: agent exited with code 1, allowed=[0]"
+                  " | stderr: " + "E" * 500 + " 真实原因在这句话的尾巴上")
+        extra = _orch()._call_extra(_resp(ok=False, raw="", error=reason),
+                                     Role.SUPERVISOR)
+        assert "真实原因在这句话的尾巴上" in extra["response_error"]
+
     def test_an_empty_raw_does_not_invent_a_field(self):
         extra = _orch()._call_extra(_resp(ok=False, raw="   ", error="e"),
                                     Role.EXECUTOR)

@@ -244,6 +244,49 @@ class TestDriveRunsTheWholeBatch:
         assert calls == ["m1"], "失败格之后不许再提交下一格"
         assert "批次停在 m1" in capsys.readouterr().out
 
+    def test_the_cli_reason_survives_into_the_delivery_note(self, repo,
+                                                           monkeypatch,
+                                                           capsys):
+        """失败那句 CLI 的原因必须原样落在 DELIVERY.md 上。
+
+        2026-09-30 真实那一跑的形状：`codex exec` 退出码 1、stdout 是空的，
+        而 `detail` 在写状态文件时被 `[:200]` 切掉 —— 就算 adapter 已经把
+        CLI 的 stderr 接进错误消息（地雷 49），人也还是读不到
+        "you've hit your usage limit … try again at Oct 4th"，
+        只能再花一次额度去复现一个本来写清楚了的失败。
+        """
+        reason = ("AgentExecutionError: agent exited with code 1, allowed=[0]"
+                  " | stderr: error: you've hit your usage limit;"
+                  " upgrade to Pro or visit codex/settings/usage to purchase more"
+                  " credits, or try again at Oct 4th, 2026 6:58 AM."
+                  + " 诊断提示：本条来自 CLI 自己的 stderr，不是框架的猜测。" * 14
+                  + " 结尾标记：这一句在 400 字之后。")
+
+        def fake_submit_next(spec, state, **kw):
+            target, _why = bp.next_step(spec, state)
+            ms = bp.milestone_state(state, str(target["id"]))
+            ms.update(status="failed", detail=reason)
+            bp.save_state(spec, state)
+            return 1
+
+        monkeypatch.setattr(bp, "submit_next", fake_submit_next)
+        spec = make_spec(repo, [{"id": "m1", "goal": "第一格：把首页做成中文",
+                                 "acceptance": "pytest test_m1.py -q"}])
+        capsys.readouterr()
+        assert bp.drive(spec, bp.load_state(spec)) == 1
+        # `drive` 自己只停批不写文档 —— 写 DELIVERY.md 的是 `run`/`ship`
+        # （地雷 45 的②：以前只有 ship 会重写，run --retry 之后人翻到的是上一轮的原因）。
+        bp.write_delivery(spec, bp.load_state(spec))
+
+        text = (bp.STATE_DIR / "unattended" / "DELIVERY.md").read_text(
+            encoding="utf-8")
+        assert "usage limit" in text, text
+        assert "Oct 4th, 2026" in text, text
+        # 尾巴断言：这一句在 1000 字之外，旧的 `[:400]` 与 `[:900]` 都会把它切掉。
+        # 变异检查做过：把显示上限改回 400，这条必红（第一次写的时候它就在 400 内，
+        # 于是"看着像断言"其实没有判据 —— 那句记录留在注释里）。
+        assert "结尾标记" in text, text[-300:]
+
     def test_once_flag_keeps_the_old_one_step_shape(self, repo, monkeypatch):
         seen = {}
 

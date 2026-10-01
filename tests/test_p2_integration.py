@@ -387,6 +387,30 @@ class TestRealSubprocessFailurePaths:
         assert response.ok is True
 
 
+    def test_a_real_nonzero_exit_carries_the_clis_stderr_into_the_record(
+            self, project, monkeypatch):
+        """真子进程退出码 1 时，它写在 stderr 上那句必须能被读到（地雷 49）。
+
+        单元测试锁的是适配器与记录上限这两段；这一条锁的是**整条管道**：
+        GenericCLIAdapter → SubprocessTransport → 真进程 → `response.error`。
+        真实那一跑的形状就是"退出码 1、stdout 一个字没有"，而原因（订阅额度到点）
+        只在 stderr 上 —— 那条日志现在就是本用例里 `[fake-agent]` 这一行。
+        """
+        monkeypatch.setenv("FAKE_AGENT_EXIT", "1")
+        cfg = load_config(config_dir=str(project), require_harness_file=True)
+        orchestrator = build_orchestrator(
+            cfg, runtime_root=project.parent / "rt_exit1", echo=lambda _m: None,
+        )
+        executor = orchestrator.registry.get(Role.EXECUTOR)
+        response = executor.run(AgentRequest(
+            request_id="req_exit", task_id="task_exit", role=Role.EXECUTOR,
+            round=1, prompt="x"))
+
+        assert response.ok is False
+        assert response.exit_code == 1, response.exit_code
+        assert "[fake-agent]" in (response.error or ""), response.error
+
+
 def _history(orchestrator) -> list[dict]:
     """读回任务的 JSONL 历史（复用编排器自己的读取路径）。"""
     assert orchestrator.store is not None

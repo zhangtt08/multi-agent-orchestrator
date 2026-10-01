@@ -1,6 +1,6 @@
 # Multi-Agent Orchestrator (MAO)
 
-**English** | [简体中文](./README.zh-CN.md)
+**Version 1.9.17** · **English** | [简体中文](./README.zh-CN.md)
 
 Coding agents burn quota on half-finished runs, and "trust me, it's done" is not a delivery. MAO wraps real coding CLI agents in a verifiable, resumable execution framework: results are judged by evidence the framework collects itself (run the tests, take the diff — never the agent's self-report), and a killed process resumes from the last completed stage instead of starting over.
 
@@ -11,7 +11,7 @@ Coding agents burn quota on half-finished runs, and "trust me, it's done" is not
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB)
 ![Platform](https://img.shields.io/badge/platform-Windows%20(verified)-blue)
-![Tests](https://img.shields.io/badge/tests-1375%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-1404%20passing-brightgreen)
 ![Version](https://img.shields.io/badge/version-1.9.17-orange)
 
 It is **not** a code-completion plugin, a chatbot, or a cloud agent service — and it is not a wrapper around one vendor: the core knows no provider, so switching CLIs is a config change, not a code change.
@@ -45,7 +45,14 @@ pip install -r requirements.txt      # core needs only pydantic + PyYAML
 
 python main.py doctor                # grouped environment check, zero quota
 python tools\smoke_test.py           # end-to-end self-check, zero quota
-python tools\workbench.py --mock     # local web workbench with mock roles, zero quota
+python tools\workbench.py --rehearsal  # opens http://127.0.0.1:8765/ — one sentence in,
+                                     # split into milestones, roles run as local fake
+                                     # subprocesses (zero quota). The delivery path is
+                                     # the real one; the content is a fixed script, so
+                                     # it shows the shape, not your sentence's result.
+python tools\workbench.py --mock     # in-process Mock roles only: it answers the UI
+                                     # questions but can never reach a delivery, so
+                                     # don't judge "what the full thing looks like" here
 ```
 
 `doctor` reports by group, with an actionable suggestion after every non-OK item. "Optional component missing" is WARN, not FAIL.
@@ -73,7 +80,8 @@ config/        production config (default --config-dir config)
 config_offline/  all-mock offline config — no CLI needed
 examples/      runnable example project (with a planted bug) + task files
 tools/         doctor / smoke tests / batch runner / delivery viewer / release check
-tests/         1375 tests (default excludes quota-consuming real_harness)
+tests/         1404 passing + 5 skipped (2026-10-01 measurement; the default run
+               excludes 8 quota-consuming real_harness tests)
 docs/          user guide, operator guide, troubleshooting, architecture
 main.py        CLI entry
 VERSION        single source of version truth (1.9.17)

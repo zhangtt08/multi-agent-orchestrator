@@ -362,6 +362,30 @@ python tools\smoke_real_harness.py --dry-run     # 会发出的真实 argv（零
        这一格确实有人在跑（租约还有效）时，它照旧拒绝，而且现在把理由说给你看。
 ```
 
+## 27. 真实调用退出码 1，现场只留下一句 "exited with code 1"
+
+```
+症状   那一格判 FAILED，RESULT.md / DELIVERY.md / agent_calls.jsonl 里只有
+       `AgentExecutionError: agent exited with code 1, allowed=[0]`，
+       而 stdout 是空的（`raw_excerpt` 因此也没写下）。看着像"这软件跑不了真 agent"。
+原因   CLI 的失败原因写在 **stderr** 上（额度用尽、参数不合、目录不被信任……）。
+       2026-09-30 之前适配器只交 `exc.message`，stderr 留在 `exc.context["stderr"]`
+       里被丢掉 —— 形状很讽刺：紧挨着那行注释写的是"把 stdout/stderr/exit_code 全带上"。
+       详见 AGENTS.md 地雷 49。现在适配器把 stderr 尾巴（800 字）接在错误消息后面，
+       并落到上面那三处；更早的运行记录得自己去找 CLI 的日志。
+解决   先读记录里的 `response_error`。不够就读 CLI 自己的会话日志 ——
+       Codex（Windows，本机实测过的路径）：
+         `%USERPROFILE%\.codex\sessions\<年>\<月>\<日>\rollout-*.jsonl`
+       按时间挑那一份，搜 `error` / `usage limit` / `"message"`。
+       这一步零成本：**别为了"复现一次"再花一次额度**。
+       实测取到过的一条就是这句：
+         "You've hit your usage limit … try again at Oct 4th, 2026 6:58 AM"
+       —— 那是订阅额度到点，不是这个框架的缺陷（`codex login status` 照旧回
+       "Logged in using ChatGPT"，很容易误判成登录问题）。
+       Claude Code 的会话记录在 `%USERPROFILE%\.claude\projects\<路径名>\` 下；
+       本次没有从那里取过失败原因，所以这条只算位置提示、不算验证过的办法。
+```
+
 ---
 
 还是没解决：把这三样贴出来就够定位了 ——

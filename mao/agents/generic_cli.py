@@ -441,6 +441,20 @@ class GenericCLIAdapter(AgentAdapter):
             )
         except (AgentExecutionError,) as exc:
             # 执行失败（含超时/非零退出码）：把 stdout/stderr/exit_code 全带上
+            ctx = getattr(exc, "context", None) or {}
+            detail = f"{type(exc).__name__}: {exc.message}"
+            # stderr 必须进这句话。真实那一跑（2026-09-30）的形状：supervisor
+            # 退出码 1、stdout 一个字都没有，而 `raw_excerpt` 因此是空的 ——
+            # 现场只剩 "agent exited with code 1, allowed=[0]"。CLI 的错误
+            # 本来就写在 stderr 上；丢掉它，等于把"为什么失败"关在进程外面，
+            # 用户能做的只剩重跑一次再花一次额度（地雷 44：说不出差在哪一格的
+            # 判据不是判据，是墙）。
+            stderr_tail = str(ctx.get("stderr") or "").strip()
+            if stderr_tail:
+                detail += f" | stderr: {stderr_tail[-800:]}"
+            cmd_display = str(ctx.get("command_display") or "").strip()
+            if cmd_display:
+                detail += f" | cmd: {cmd_display[:160]}"
             return AgentResponse(
                 request_id=request.request_id,
                 role=request.role,
@@ -451,7 +465,7 @@ class GenericCLIAdapter(AgentAdapter):
                 provider=profile.name,
                 duration_ms=process_result.duration_ms,
                 transport=getattr(transport, "name", None),
-                error=f"{type(exc).__name__}: {exc.message}",
+                error=detail,
                 call_id=call_id,
                 exit_code=process_result.exit_code,
                 timed_out=process_result.timed_out,

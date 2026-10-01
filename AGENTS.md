@@ -102,12 +102,24 @@ Agent 自述  执行者说它做了什么 —— 只是供述
 7. **计数要数在被测性质上**。`len(commands_run)` 看着像"验证跑了几次"，里面混着框架取证的
    `git diff`。真正对应"stage 没重复执行"的是 VERIFICATION_COMPLETED 的 COMMITTED 数。
    同理：测试计数的权威是 JUnit，终端点数会被机器上的安全删除钩子污染。
+   **搬来这台机器之后的观测（2026-09-30，别把它当噪声划掉）**：全量跑里出现过
+   两次**不同**的用例闪红，单独跑都绿、紧接着再全量也绿：
+   `tests/test_baseline_count.py::test_measure_file_end_to_end`（它自己起嵌套 pytest）
+   与 `tests/test_p9_concurrency.py::TestControlIsolation::test_cancel_a_does_not_affect_b`
+   （线程 + 租约计时）。7 次全量里 2 次闪红，都在"起子进程/靠计时"的那一类上，
+   与被测性质无关 —— 这台机器上还有别的会话在同目录里跑（见地雷 37）。
+   判据因此要按形状读：**红的那一条是不是自己起进程/靠时间的那一类**；
+   是，就先单独复跑一次再判断，并把那一次的 `--tb=short` 输出留下；
+   不是，就当成缺陷查，别因为"上次也是闪的"而放绿。
+   （`measure_file` 已给每次嵌套各自 `--basetemp` + 独立临时目录，注释写明了为什么。）
 8. **worktree 的相对路径相对进程 cwd 解析**，而 git 调用的 cwd 是 source —— `worktree_root`
    必须是绝对路径（构造期 resolve，有回归测试）。
 9. **worker 线程连接不要重复 `PRAGMA journal_mode=WAL`**：WAL 是库头持久属性，重复切是写操作，
    并发首连互锁到 busy_timeout（实测整批任务静默卡到 lease 过期）。
 10. **验收命令用裸 `pytest`，不要写 `python -m pytest`**：托管型 venv 的 `Scripts/python.exe`
     是跳板，裸 `python` 可能落到没有 pytest 的基础解释器。
+    反过来"裸 `pytest`"也不是白来的 —— 面板/门禁/桌面版都按绝对路径起解释器、没激活 venv，
+    于是它以前在这台机器上一条都没起来过。判据与 remedy 见地雷 51。
 11. **embedding worker 的管道是二进制 JSON-lines**：会话级 sitecustomize shim 会包装 text IO，
     `text=True` 时 stdin 写入报 Errno 22。
 12. **真实 CLI 两个反直觉点**：执行角色不能用 `--output-format json`（信封会让改动不落盘），
@@ -474,7 +486,11 @@ Agent 自述  执行者说它做了什么 —— 只是供述
     现在三种结论都露面（本机 codex 是 `Logged in using ChatGPT`，这个软件不存 key，
     见 `.env.example` 顶部那段）。
     **`git init` 也是重建的一部分**：本机现在这份仓库 = 收到的现场 + 上述重建，
-    基线标签 v1.9.17 打在这上面；它不是原历史，别拿它推算"搬运方改了什么"。
+    基线就是那个重建提交（现在仓库里是 `3a76e8b`，日期 2026-09-30）；它不是原历史，
+    别拿它推算"搬运方改了什么"。**标签这一层在本机不存在**（09-30 打过的 v1.9.17
+    基线标签如今 `git describe --tags` 查不到，仓库里 0 个标签），所以凡是要 `--ref <标签>`
+    的工具（`make_desktop_app.py`）先传 commit，或者经业主同意重打标签 —— 见"仓库约定"
+    那一节，那一段现在还写着远端的现状。
 
 47. **同一扇门后面站着两个动作时，路由要先问"表单带来的是哪一个"，不要各自抢走整条路径**
     （2026-09-30，搬来之后的第一轮全绿）。`/steer` 有两支：批次层面的（带 `project`，
@@ -521,14 +537,136 @@ Agent 自述  执行者说它做了什么 —— 只是供述
     ② 里程碑 acceptance 写成 PowerShell 脚本时，**执行者写的 `.ps1` 是 UTF-8 无 BOM，
     而 Windows PowerShell 5.1 按 GBK 读**，中文字符串因此丢掉收尾引号 -> 整个脚本
     解析失败。Reviewer 判 BLOCKED 是对的（它是照自己那一份结论说的，不是机械事实）。
-    这条还没修：要么让取证那一层用 `pwsh`/带 BOM 的写法，要么在计划层就别把
-    `.ps1` 当验收载体 —— 判据要落在框架能跑的那一侧。
+    现在 `goal_for()` 把这台机器的读法告诉写文件的人（地雷 35：前提由程序说明）。
+    **2026-10-01 在同一份残现场上复测，又冒出第二条，而且光有 BOM 不够**：把那两个
+    `.ps1` 补上 BOM 之后仍然 ParserError，只是报错从第 9 行挪到第 21 行 —— 那一行是
+    `throw "“开始使用”没有分别说明…"`，PS 5.1 把**中文引号**当字符串收尾引号。
+    于是简报里两条一起说（带 BOM + 不要出现 `“ ” ‘ ’`），并且 `run_milestone_acceptance`
+    遇到 `powershell`/`pwsh` + `ParserError`/`UnexpectedToken` 时，把这句写在记录**开头**
+    （`_powershell_parse_hint()`）—— 不然人读到的是一串按 GBK 打出来的乱码尾巴，
+    分不清"这台机器没读对脚本"和"活没干对"。地雷 44 的同一条：判据必须说得出差在哪。
+    **判据一条没动**：退出码照旧是 1，闸门照旧不放行，`acceptance_exit` 也照旧只是记录
+    （①里那条升格判据还欠着 —— 要落在 `VerificationRunner` 那一层）。
+    那一格的交付物本身是好的：`runtime_workspaces/rt-0d31587a1da9/使用说明.md` 今天还在，
+    落地目录 `mao-doc-delivery` 里却只有基线那一份 README —— 卡住的从来不是"文档没写出来"。
     ③ `DELIVERY.md` 把验收命令截到 60 字符，表里因此印出 `tests/te` 这种**根本不存在的
     路径**（实测）。证据文档不许印一个查不到的命令，现在写全文 + 框架实测结论。
     ④ 还有一条**不是 bug 的结果**值得记住：真实那一格的产出是诚实但没用的 ——
     执行者照着里程碑那句"核对 README.md"写了满篇"README.md 对…没有记录"，
     因为落地目录的 README 本来就没写 MAO 怎么用。目标那句话把验收面指错了地方，
     软件就老实把"查不到"交付出来。放宽限制不在此列，这是**提示词的形状问题**。
+
+49. **失败调用必须留下 CLI 的 stderr —— 只有退出码不是判据**（2026-09-30 真实第二跑，已修）。
+    现场：`codex exec -s read-only --skip-git-repo-check -` 作为 supervisor **退出码 1**，
+    stdout 一个字都没有。`agent_calls.jsonl` 里那一格只有
+    `response_error = "AgentExecutionError: agent exited with code 1, allowed=[0]"`，
+    `raw_excerpt` 因为是按 stdout 取的所以**是空的**，`RESULT.md` 与 `DELIVERY.md` 同样
+    只剩这一句。人想知道为什么，只能再花一次额度重跑 —— 这正是地雷 44 说的
+    "判据说不出差在哪一格时，它就不是判据，是一堵墙"。
+    形状有点讽刺：`generic_cli.py` 那行注释早就写着"把 stdout/stderr/exit_code 全带上"，
+    而代码用的是 `exc.message`（不含 context），stderr 就在 `exc.context["stderr"]` 里
+    被丢掉 —— 注释是对的，代码没做到。`AgentResponse` 也**没有 stderr 字段**
+    （`ProcessResult` / `RawHarnessResponse` 有），所以别指望下游自己捡到。
+    现在 adapter 把 `stderr` 尾巴（800 字符）与 `command_display` 接在
+    `error` 这句话后面，`orchestrator._call_extra` 的 `response_error` 上限从 400
+    提到 1400（400 会正好切掉"为什么失败"那一段）。
+    回归 `tests/test_p2_adapter.py::test_a_failed_call_keeps_the_clis_stderr_in_the_error_text`，
+    **已做变异检查**：把 adapter 换回旧的那句，它报的正是
+    `AgentExecutionError: agent exited with code 1, allowed=[0]`（红），换回来绿。
+    推论：任何"只带退出码/只带布尔结论"的失败记录，都要问一句
+    **"读它的人能不能据此行动"**；不能，就把原始那一份留下（脱敏之后），
+    而不是让人重跑一次去复现。`redact_mapping` 会按**键名**里的
+    `KEY/TOKEN/SECRET/PASSWORD/COOKIE/CREDENTIAL/AUTH/SESSION` 打码，
+    所以新键名别叫 `*auth*`/`*key*`；用 `stderr` 这种中性名字，值本身仍会过 `redact_text`。
+
+50. **批次身份 = 状态文件名，所以"两批同名"就是两批共享进度 —— 假绿比红危险**
+    （2026-09-30 彩排档第一次连着跑第二格，已修）。
+    现场证据都还在：`runtime_batch/planned/ws-012154.project.json` 里
+    `name="esc-flow"`、`owner_goal` 是我那句"在项目根创建一份《验收说明.md》"，
+    而 `workspace` 指向 `%TEMP%\mao-rehearsal\ws`；`runtime_batch/esc-flow.json` 里
+    那份状态写的是**另一个落地目录**（一次面板跑的 `mao-panel-*`）与
+    `m1=done / m2=failed`。于是新那一批 `run` 一上来就报
+    "里程碑 m2 之前失败了。批次不会跳过它 —— 要重来一格：run --retry m2"，
+    并把 `DELIVERY.md` 写进 `runtime_batch/esc-flow/`（旧批次那个目录）。
+    一句话：**一格从没在本批跑过，却顶着别人 done/failed 的样子**——
+    判据全绿的那份"交付"讲的是别的项目的格子。
+    根因不是彩排档的错：`tools/rehearsal.py` 那份本地假 supervisor 固定回
+    `name="esc-flow"`，而真实那一档 Planner 同样会**自己挑一个名字**，
+    `plan()` 原先把它直接当 `runtime_batch/<name>.json` 用，从不问这个名字
+    是不是已经被别的批次占了。凡是"身份由模型的回答决定"的地方，都要问一句
+    "这个回答和另一个回答撞上了会怎样" —— 这里撞的是进度。
+    现在的形状（`batch_project.plan()`，`target.write_text` 之前）：状态文件已存在
+    且它记录的 `workspace` 与这次给的 `--workspace` **不同** → 当场给这一批换一个
+    没人占用的身份（`_state_owned_elsewhere()` 判占用，`_free_batch_name()` 按项目档
+    文件名推新名字，推不出 ASCII slug 才退回 `<原名>-2`），并把"原名被谁占着、那一批
+    落在哪个目录、这一批改成了什么"三句都说出来。**故意不改的两种**：同名同落地目录
+    （重拆自己那批 —— 地雷 35 那条"限制要留在判据上，动作要搬到程序这一边"，
+    这里就是别把正常的重拆变成新的一道墙）、状态文件里读不出 workspace（无法证明
+    是两批就按同批处理）。身份规则本身收在 `_state_file()` 一处，`state_path()`
+    只是它的外壳 —— 别在第二个地方重新拼这个路径。
+    **为什么不拒**：名字是模型回答里的一个字段，而切分那一次真实 Supervisor 调用
+    已经花掉了；拒掉等于人为同一句话再付一次（业主原话"怎么填都不行"的第三种形状）。
+    回归 `tests/test_batch_project.py::TestPlan::test_a_name_owned_by_another_batch_renames_instead_of_sharing`
+    + `test_the_same_name_for_the_same_workspace_is_still_allowed`（后者专门守着
+    "别改过头"；前者还断言旧批次的状态文件逐字节没动、新批次开局 `milestones == {}`）。
+    **已做两次变异检查**：先删"拒"那一版 → 报 `assert 0 == 2` 并打出"项目档已写好"；
+    再删"改名"这一版 → 报 `assert 'esc-flow' != 'esc-flow'`（同名共享进度）。
+    推论：`--rehearsal` 那一档**演的是交付路径，不是"你这句话会被怎么切"** ——
+    它给的是固定剧本（名字、里程碑都不随输入变），所以 README/`--help` 里
+    别把它写成"按你的目标切分"；要看真实切分只能花真实 Supervisor 调用。
+    留给后续的一条（**没做**）：批次身份理想上应**一直**由 `--project` 的文件名推导，
+    模型回的那个名字只当展示用的长名字 —— 现在它只在撞车时才生效，
+    改成品默认会动 `run`/`ship`/`accept`/`status` 与面板批次格共同依赖的那个键。
+
+51. **框架代跑"别人声明的那条命令"时，前提由程序满足 —— 但命令名换算必须在 argv 上做**
+    （2026-10-01 实测，已修）。现场：`--one`/`--panel` 两跑的交付说明里，每一格的
+    验收那一列都是 `pytest -q`（框架实测：没跑成 —— 起不来：`FileNotFoundError:
+    [WinError 2]`）。也就是说**"验收 agent 切出来的那条判据从来没被框架量过**，
+    而业主看到的是一整批"没跑成"。本机事实：`pytest.exe` 就在
+    `C:\Users\Administrator\mao-venv\Scripts\`（跑着框架的那个解释器旁边），
+    而那个目录不在 PATH 上 —— 面板、门禁、桌面版全是按绝对路径起解释器的，
+    AGENTS.md 起手那三步（`Activate.ps1`）根本没发生；裸 `python` 则落到
+    `C:\Program Files\Python312\`（地雷 10 说的跳板，那边没有 pytest）。
+    地雷 35 的形状又出现了一次：判据（"这一格要用这条命令验"）没问题，
+    **缺的那个前提是人的终端作业**，而程序完全替得了 —— "激活 venv"这件事
+    程序比人更知道自己跑在哪个解释器上。
+    现在的形状，判据收在一处（`mao/harness/discovery/executable.py`，
+    就是"哪个可执行文件"那唯一一份判据，别再开第二家）：
+    `interpreter_scripts_dir()` → `framework_command_env()`（把那个目录放到子进程
+    PATH **首位**，按 `os.environ` 里那一把键的大小写原地改，不许长出 `Path`+`PATH`
+    两份）→ `framework_command_argv()`（按**那一份 PATH**把 argv[0] 换算成绝对路径）。
+    消费方三处共用 `_framework_command()`：逐格 acceptance、批次总验收 `verify()`、
+    demo；核心 `VerificationRunner.run_one()` 用同两个函数。**为什么不碰 agent CLI
+    那条路**（`SubprocessTransport`）：把本框架的 Scripts 塞进真 CLI 的 PATH 会遮蔽
+    项目自己装的那份 CLI，那正是 §19 反对的"以为在用指定的那一份"。
+    **最反直觉的一条**：只改 env 不够。Windows 的 `CreateProcess` 是按**调用方进程**
+    的 PATH 找可执行文件的，`lpEnvironment` 那一份只决定子进程自己看到什么 ——
+    实测 `pytest.exe` 就在那个目录里、也确实被插进了传进去的 env 的 PATH 首位，
+    仍然 WinError 2。命令名必须在 argv 上就换算掉。
+    边界一条没松：白名单仍按**声明原文**判；记录里的 `command_display` 与
+    DELIVERY 那一列也仍是声明原文，实际起了哪个二进制写在 `acceptance_resolved`；
+    显式写成路径的那一条**不换算**（§19）；真找不到就照旧 `acceptance_exit=None`
+    / `not-run`，绝不折成 0（地雷 48：那一列是记录，不是否决）。
+    修完的实测：`--one` 与 `--panel` 两跑的每一行变成 `pytest -q`（框架实测
+    **exit=5**）—— 假 agent 的工作区里确实没有测试，exit 5 是这条命令的真答案，
+    七条判据仍然全绿（"没跑成"变成"量过了"，这才是验收那一条腿接上）。
+    **还有一档要它成立：业主双击桌面版那一档。** 按注册表里 machine+user 的 PATH
+    原样重建（`C:\Program Files\Python312`、`Git\cmd`、`WindowsPowerShell1.0`、
+    `~/.local/bin`、`Roaming/npm`，**不含**跑框架的那个 venv）再跑一遍 `--panel`：
+    前提检查里 `which('pytest')` 是 None，七条判据仍然全绿、每一行仍然是量出来的
+    `exit=5`。所以"裸 `pytest` 起不来"这件事不靠人先激活 venv —— 桌面版
+    `make_desktop_app.py` 把 PYDIR 钉在**生成它的那个解释器**上，那一档也走同一份
+    `framework_command_env()`。本机目前没装桌面版（找不到 `start-mao*.bat`），
+    所以这一条是按重建的 PATH 证的，不是按装好的快捷方式证的。
+    回归 `tests/test_batch_project.py::TestFrameworkCommandsGetTheirOwnInterpreterPath`
+    三条 + `tests/test_p2_infrastructure.py::test_verification_runner_runs_a_bare_name_the_parent_path_does_not_have`
+    + `tests/test_cli_discovery.py::TestFrameworkCommandEnv` 五条。
+    **已做两次变异检查**：`_framework_command()` 改成原样交出 → 前两条报
+    `起不来：[WinError 2]`（正是本机那个症状）；`verification.py` 换回旧的那三行 →
+    核心那条报 `command not found: pytest`。夹具坑：把 venv 的 `Scripts/python.exe`
+    拷到别处会得到 `0xC0000135`（DLL 是按 exe 自己所在目录找的），
+    所以 `tests/conftest.py::probe_console_script` 拷的是 **base** 解释器
+    `sys._base_executable` 并连 `*.dll` 一起带上。
 
 ## 配额与证据纪律
 
@@ -563,7 +701,7 @@ Agent 自述  执行者说它做了什么 —— 只是供述
 |---|---|
 | 要装、要跑、要看交付物在哪 | `docs/USER_GUIDE.md`（§12 工作台网页、§12.2 工作流页、§13 批次、§13.1 无人值守、§7/§13.2 中途改方向） |
 | 长期值守：lease / stale recovery / 容量 / worktree 生命周期 / SQLite | `docs/OPERATOR_GUIDE.md` |
-| 有症状没原因（按症状 26 条） | `docs/TROUBLESHOOTING.md` |
+| 有症状没原因（按症状 27 条） | `docs/TROUBLESHOOTING.md` |
 | 分层、数据协议、状态机、加 Harness 或 Adapter | `docs/ARCHITECTURE.md` |
 | 这一版验证到什么程度、发布后修了什么 | `docs/history/RELEASE_REPORT_v1.0.0.md`（§10 是 v1.0.1 补丁） |
 | 发布内容与排除项 | `RELEASE_MANIFEST.md`、`RELEASE_CHECKLIST.md` |
@@ -577,9 +715,19 @@ Agent 自述  执行者说它做了什么 —— 只是供述
 行尾策略      .gitattributes `* text=auto eol=lf`。指纹与产物哈希按字节算，
               所以一次 checkout 的行尾差异就足以让工作区被误判成"被篡改"
 标签          已发布的标签不改写 —— 补丁开新版本。
-              v1.0.0 / v1.0.1 的标签随 09-28 那次搬运连 .git 一起丢了，本机无副本，
-              不可恢复；历史现在是 Phase 1-7 真历史 + b932794 起的恢复提交。
-              v1.0.2 起重打标签。
-远端          无。不 push
+              **本机现状（2026-10-01 量的）：一个标签都没有** —— `git describe --tags`
+              报 No names found。v1.0.0 / v1.0.1 的标签随 09-28 那次搬运连 .git 一起丢了，
+              不可恢复；09-30 重建时打的 v1.9.17 基线标签也不在这台机器上（仓库现在是
+              4 个提交、最老那个是 `3a76e8b "MAO v1.0.0 — …"`，日期 2026-09-30）。
+              后果两条：① 版本判据不看标签，看 VERSION == mao.__version__（守卫锁这条）；
+              ② `tools/make_desktop_app.py --ref <标签>` 现在给不出标签，要么传 commit，
+              要么业主明确同意之后重打一个。**别为了让命令好看而顺手打标签** ——
+              这仓库现在连着远端，标签会被推走（见下）。
+远端          **现在有了**：`origin = https://github.com/zhangtt08/multi-agent-orchestrator.git`，
+              且 HEAD 与 `origin/main` 完全相同（`rev-list --left-right --count` = 0 0）——
+              是并行的另一个会话加的并已推送。规矩仍然是：**不 push、不动远端**，
+              除非业主明说；接手先 `git remote -v` 看清现状，别照抄这一段话去"纠正"远端。
+              要意识到的是：推上去的是**重建的历史**（地雷 46：四个目录是照幸存消费者
+              与测试重写的，行为等价、身份不同），不是原来那台机器上的真历史。
 提交          一个提交一件事；commit message 说为什么和当时的判据，不复述 diff
 ```

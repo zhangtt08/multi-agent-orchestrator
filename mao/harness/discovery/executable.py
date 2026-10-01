@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import sys
 from dataclasses import dataclass, field
 from glob import glob
 from pathlib import Path
@@ -276,6 +277,66 @@ def resolve_profile_command(profile: Optional[object]) -> ResolvedCommand:
     return resolved
 
 
+def interpreter_scripts_dir() -> str:
+    """当前这个"正在跑框架的解释器"自己的目录（venv 的 `Scripts/`）。
+
+    装包时生成的控制台脚本（`pytest.exe` 这类）就落在这个目录里。业主按
+    AGENTS.md 起手三步（激活 venv 再跑）时，这个目录本来就在 PATH 上；
+    用绝对路径起解释器时（桌面版、门禁脚本、`C:\\...\\mao-venv\\Scripts\\python.exe`）
+    它不在 —— 于是被切出来的验收命令 `pytest -q` 根本起不来
+    （实测：WinError 2，状态里记成 `acceptance_exit: null`，地雷 10 说的就是这一族）。
+    """
+    return str(Path(sys.executable).parent)
+
+
+def framework_command_env(overrides: Optional[dict] = None) -> dict:
+    """框架**代跑验收/验证命令**时给子进程的那份环境（判据只写这一处）。
+
+    只做一件事：把 `interpreter_scripts_dir()` 放到 PATH 最前面，让一条
+    `pytest -q` 这样的命令能找到与"跑着框架的那个 venv"配套的那个 pytest。
+    这是在**满足前提**，不是放松判据：命令本身、退出码、白名单都不动，
+    跑不起来仍然记成"没成立"，绝不折成 0。
+    不动 agent CLI 那一条路（SubprocessTransport 调真 CLI 时不经过这里）——
+    把本框架的 Scripts 目录塞进 CLI 的 PATH 会遮蔽项目自己装的那份 CLI，
+    那是"让用户以为在用自己指定的那份"（见模块开头 §19）。
+    """
+    env = {str(k): str(v) for k, v in os.environ.items()}
+    env.update({str(k): str(v) for k, v in (overrides or {}).items()})
+    # Windows 上这个键的大小写是 "Path"；新加一份 "PATH" 会让子进程同时看到两条，
+    # 谁生效取决于顺序 —— 按 os.environ 里那一把键原地改。
+    key = next((k for k in env if k.upper() == "PATH"), "PATH")
+    here = interpreter_scripts_dir()
+    parts = [p for p in str(env.get(key) or "").split(os.pathsep) if p]
+    if not any(p.lower() == here.lower() for p in parts):
+        env[key] = os.pathsep.join([here] + parts) if parts else here
+    return env
+
+
+def framework_command_argv(argv, env: Optional[dict] = None):
+    """把 argv[0] 按**子进程那一份 PATH**换算成绝对路径，返回 `(argv, 说明)`。
+
+    为什么光改 env 不够（实测 2026-10-01）：Windows 的 `CreateProcess` 找
+    可执行文件时用的是**调用方进程**的 PATH，`lpEnvironment` 那一份只决定子进程
+    自己看到什么。所以把 `Scripts` 目录插进传进去的 env 之后，`pytest` 仍然报
+    WinError 2 —— 命令名必须在这里就换算掉。
+    已经写成绝对/相对路径的那一份**不换算**（§19：显式路径坏了不许去 PATH 上
+    找同名二进制来救活），解析不到也原样交出去 —— 让"起不来"照旧记成"没成立"。
+    """
+    argv = [str(a) for a in (argv or [])]
+    if not argv:
+        return argv, ""
+    declared = argv[0]
+    if os.path.isabs(declared) or os.sep in declared or (
+            os.altsep and os.altsep in declared):
+        return argv, ""
+    env = framework_command_env() if env is None else env
+    key = next((k for k in env if k.upper() == "PATH"), "PATH")
+    found = shutil.which(declared, path=str(env.get(key) or ""))
+    if not found:
+        return argv, ""
+    return [found] + argv[1:], f"{declared} → {found}"
+
+
 __all__ = [
     "KNOWN_INSTALL_GLOBS",
     "REASON_EMPTY",
@@ -285,6 +346,9 @@ __all__ = [
     "SOURCE_EXPLICIT",
     "SOURCE_KNOWN",
     "SOURCE_PATH",
+    "framework_command_env",
+    "framework_command_argv",
+    "interpreter_scripts_dir",
     "known_location_candidates",
     "resolve_executable",
     "resolve_profile_command",

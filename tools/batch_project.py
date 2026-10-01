@@ -225,8 +225,51 @@ def check_spec(raw: Dict[str, Any], *, origin: str) -> Dict[str, Any]:
     return raw
 
 
+def _state_file(name: str | Path) -> Path:
+    """批次身份 = 这一个路径。判据只写这一处（地雷 50 的形状：两处各写一遍就是缺陷）。"""
+    return STATE_DIR / (str(name).replace("/", "_") + ".json")
+
+
 def state_path(spec: Dict[str, Any]) -> Path:
-    return STATE_DIR / (str(spec["name"]).replace("/", "_") + ".json")
+    return _state_file(spec["name"])
+
+
+def _state_owned_elsewhere(name: str, ws: str, target: Path) -> str:
+    """这个名字的状态文件若属于**另一个落地目录**的批次，返回那一批的 workspace。
+
+    同名 = 共享进度：`load_state` 按名字取，于是新批次一上来就读到旧批次
+    "哪一格 done、合过哪个 commit"，DELIVERY.md 也写进旧批次那个目录
+    （2026-09-30 彩排档实测，见 AGENTS.md 地雷 50）。
+    同名而 workspace 相同 = 同一批在重拆，那是正常流程，不报冲突。
+    """
+    p = _state_file(name)
+    if not p.is_file() or str(p.resolve()) == str(Path(target).resolve()):
+        return ""
+    try:
+        other = str(json.loads(p.read_text(encoding="utf-8")).get("workspace") or "")
+    except (OSError, ValueError):
+        return ""                      # 读不出身份就当作没占用，别把重拆拦死
+    if other and str(Path(other)) != str(Path(ws)):
+        return other
+    return ""
+
+
+def _free_batch_name(taken: str, target: Path) -> str:
+    """给这一批找一个**状态文件还不存在**的名字（占用它的人才知道该改哪儿）。
+
+    优先按项目档文件名推：`ws-012154.project.json` → `ws-012154`，一次切分一个
+    时间戳，天然不撞。推不出 ASCII slug（纯中文的项目档名）才退回 `<原名>-2/-3/…`。
+    """
+    stem = Path(target).stem
+    if stem.endswith(".project"):
+        stem = stem[: -len(".project")]
+    base = _name_slug(stem) or _name_slug(taken) or "batch"
+    cand, i = base, 2
+    while True:
+        p = _state_file(cand)
+        if not p.exists() and str(p.resolve()) != str(Path(target).resolve()):
+            return cand
+        cand, i = f"{base}-{i}", i + 1
 
 
 def load_state(spec: Dict[str, Any]) -> Dict[str, Any]:
@@ -320,9 +363,15 @@ def goal_for(spec: Dict[str, Any], milestone: Dict[str, Any],
         # 因此丢掉收尾引号，整份文件解析失败，本格 BLOCKED。判据本身没错，
         # 错在我们没把"这台机器怎么读 .ps1"这件事告诉写文件的人（地雷 35：
         # 限制留在判据上，动作搬回程序这一边）。
+        # 2026-10-01 在同一次现场复测补了第二条：**光有 BOM 不够**。那份脚本补上
+        # BOM 之后仍然 ParserError，报错从第 9 行挪到第 21 行 —— 那一行是
+        # `throw "“开始使用”没有分别说明…"`，PS 5.1 把中文引号当字符串定界符。
         text += ("\n这一格的验收命令是 PowerShell 脚本：`.ps1` 必须存成 "
                  "UTF-8 **带 BOM** —— Windows PowerShell 5.1 否则按 GBK 解码，"
                  "脚本里的中文会让整份文件解析失败、退出码永远不是 0。"
+                 "并且脚本里**不要出现中文引号**（“ ” ‘ ’）：PowerShell 5.1 把它们"
+                 "当作字符串的收尾引号，带 BOM 也一样解析失败 —— 要引用章节名就用 "
+                 "ASCII 引号，或者干脆不带引号。"
                  "能不写中文就别在脚本里写中文；或者换一条与编码无关的验收命令。")
     if constraints:
         text += "\n约束：" + "；".join(str(c) for c in constraints) + "。"
@@ -721,8 +770,11 @@ def watch_one(spec, state, target, ms, interval, timeout, echo,
             _report_ready(spec, state, target, ms, echo)
             return 0
         if status in TERMINAL_BAD:
+            # 900 而不是 200：`detail` 是唯一进状态文件、进 DELIVERY.md 的那句话，
+            # 而 adapter 现在把 CLI 的 stderr 接在错误消息后面（地雷 49）。
+            # 截在 200 会正好把"为什么失败"那一段切没 —— 那等于白修。
             ms.update(status="failed", finished_at=_now(),
-                      detail=str(row.get("last_error") or "")[:200])
+                      detail=str(row.get("last_error") or "")[:900])
             save_state(spec, state)
             echo(f"  里程碑 {target['id']} 没收口：{status} "
                  f"{ms['detail']}\n  修完再 run；已完成的里程碑不会被重跑。")
@@ -787,10 +839,11 @@ def run_demo(target: Dict[str, Any], workspace: str, echo=print,
         return {"status": "not-declared"}
     argv = [str(a) for a in demo["command"]]
     echo(f"  跑 demo：{' '.join(argv)}  (cwd={workspace})")
+    argv, child_env, _note = _framework_command(argv)
     try:
         proc = subprocess.run(argv, cwd=workspace, capture_output=True,
                               text=True, encoding="utf-8", errors="replace",
-                              timeout=timeout)
+                              timeout=timeout, env=child_env)
     except OSError as exc:
         echo(f"    起不来：{exc}")
         return {"status": "error", "detail": str(exc)[:200]}
@@ -818,6 +871,42 @@ def run_demo(target: Dict[str, Any], workspace: str, echo=print,
     return result
 
 
+def _framework_command(argv):
+    """框架代跑一条**声明出来的**命令时要用的 `(argv, env, 换算说明)`。
+
+    判据只写在 `mao/harness/discovery/executable.py` 那一处（把"正在跑框架的那个
+    解释器自己的目录"补进子进程 PATH 首位，并按那一份 PATH 换算命令名）；这里让
+    demo / 批次总验收 / 逐格验收三个调用点共用同一份，不另立第二套发现逻辑。
+    换算只影响"起哪一个二进制"：声明原文仍是记录里那一条，跑不起来也照旧不算通过。
+    """
+    from mao.harness.discovery.executable import (framework_command_argv,
+                                                 framework_command_env)
+    env = framework_command_env()
+    resolved, note = framework_command_argv(list(argv), env)
+    return resolved, env, note
+
+
+def _powershell_parse_hint(argv, text: str) -> str:
+    """PowerShell 那两种本机坑，从报错里认出来就替人写成一句能照着做的话。
+
+    现场（2026-10-01，`usage-guide` 那一批留下的执行工作区还在）：交付物《使用说明.md》
+    本身写出来了，卡的是那条 `powershell -File tests/test_start.ps1` —— 框架现在起得来
+    这条命令了（地雷 51），退出码却是 1，而记录里的尾巴是一串按 GBK 打出来的
+    ParserError。读它的人看不出这是"这台机器的 PowerShell 怎么读 .ps1"，还是"活没干对"。
+    这句只是**把已经发生的事实说清楚**：判据、退出码、闸门都不动。
+    """
+    head = str(argv[0] if argv else "").replace("\\", "/").rsplit("/", 1)[-1].lower()
+    if head not in ("powershell", "powershell.exe", "pwsh", "pwsh.exe"):
+        return ""
+    blob = text or ""
+    if "ParserError" not in blob and "UnexpectedToken" not in blob \
+            and "意外的标记" not in blob:
+        return ""
+    return ("[本机坑] PowerShell 5.1 没能解析那个 .ps1（不是活没做，是脚本没被读对）："
+            ".ps1 要存成 UTF-8 带 BOM，且脚本里不要出现中文引号 “ ” ‘ ’ —— "
+            "实测同一份脚本补了 BOM 之后报错从第 9 行挪到第 21 行，卡的就是中文引号。")
+
+
 def run_milestone_acceptance(spec: Dict[str, Any], ms: Dict[str, Any],
                              acceptance: str, echo=print) -> Optional[int]:
     """框架**自己**跑一遍这一格的 acceptance，把退出码记进状态文件。
@@ -842,21 +931,30 @@ def run_milestone_acceptance(spec: Dict[str, Any], ms: Dict[str, Any],
         echo("    验收命令：没跑（没有执行工作区）")
         return None
     argv = shlex.split(acceptance, posix=(os.name != "nt")) or [acceptance]
+    # 地雷 10 的另一半：命令写得没毛病，缺的是"激活 venv"那个前提，而程序自己
+    # 满足得了（换算规则在 _framework_command 那一处）。判据不动：跑不起来仍记 None。
+    argv, child_env, resolved = _framework_command(argv)
+    ms["acceptance_resolved"] = resolved            # 空字符串 = 原样交给系统
     try:
         proc = subprocess.run(argv, cwd=ws, capture_output=True, text=True,
-                              encoding="utf-8", errors="replace", timeout=900)
+                              encoding="utf-8", errors="replace", timeout=900,
+                              env=child_env)
     except (OSError, ValueError) as exc:
         # 起不来不等于没通过（与 verify 同一句话，同一个理由）。
         ms["acceptance_exit"] = None
         ms["acceptance_note"] = f"起不来：{type(exc).__name__}: {exc}"[:200]
         echo(f"    验收命令：起不来（{ms['acceptance_note']}）—— 这一格保持未确认")
         return None
+    full = (proc.stdout or "") + "\n" + (proc.stderr or "")
     tail = "\n".join((proc.stdout or proc.stderr or "").strip()
                      .splitlines()[-3:])
+    hint = _powershell_parse_hint(argv, full)
     ms["acceptance_exit"] = proc.returncode
-    ms["acceptance_note"] = tail[:400]
+    ms["acceptance_note"] = ((hint + " ") if hint else "") + tail[:400]
     echo(f"    验收命令：exit={proc.returncode} [框架] "
-         f"{(tail.splitlines() or ['-'])[-1][:80]}")
+         f"{(tail.splitlines() or ['-'])[-1][:80]}"
+         + (f"（按 {resolved} 起的）" if resolved else "")
+         + (("\n    " + hint) if hint else ""))
     return proc.returncode
 
 
@@ -1388,18 +1486,22 @@ def verify(spec: Dict[str, Any], state: Dict[str, Any], echo=print) -> int:
         return 2
     argv = [str(a) for a in fa["command"]]
     echo(f"跑批次总验收：{' '.join(argv)}  (cwd={spec['workspace']})")
+    argv, child_env, _note = _framework_command(argv)
     try:
         proc = subprocess.run(argv, cwd=str(spec["workspace"]),
                               capture_output=True, text=True,
-                              encoding="utf-8", errors="replace", timeout=1800)
+                              encoding="utf-8", errors="replace", timeout=1800,
+                              env=child_env)
     except OSError as exc:
         # 跑不了不等于没通过。这里不写 state["final"]，也不抛 traceback ——
         # 否则一次 PATH 问题会被读成"批次总验收 FAIL"，而它其实一次都没跑。
-        # 实测：验收命令按 AGENTS.md 写成裸 `pytest`，而从 Git Bash 起的进程
-        # PATH 里没有它（托管 python 是跳板，真解释器在同名 versions 目录）。
+        # "裸 pytest 在这台机器上起不来"那一半已经由 _framework_command 替人满足了
+        # （地雷 10 与地雷 35 的交接处：前提程序能建，就由程序建）；走到这里说明
+        # 那个命令**真的不在这台机器上**，那就把没找到的东西说清楚。
         echo(f"  起不来：{exc}")
-        echo(f"  这一格保持 not-run。把 {Path(sys.executable).parent} 加进 PATH"
-             f"（或换用绝对路径的验收命令）后重跑 verify。")
+        echo(f"  这一格保持 not-run。它不在 PATH 上，也不在 "
+             f"{Path(sys.executable).parent}（跑着框架的那个解释器自己的目录）里 —— "
+             f"要么装它，要么把验收命令改成这台机器上真有的那一条。")
         return 2
     tail = (proc.stdout or proc.stderr or "").strip().splitlines()[-3:]
     ok = proc.returncode == 0
@@ -1524,7 +1626,8 @@ def write_delivery(spec: Dict[str, Any], state: Dict[str, Any]) -> Path:
     if stopped:
         lines += ["## 停下来的格子与原因", ""]
         for mid, ms in stopped:
-            lines.append(f"- {mid}：{str(ms.get('detail') or '没有记录')[:400]}")
+            # 与上面同一个理由：这一行就是人来读的那一行，别再切一刀。
+            lines.append(f"- {mid}：{str(ms.get('detail') or '没有记录')[:900]}")
         lines.append("")
     patches = [str(milestone_state(state, str(m['id'])).get("patch") or "")
                for m in spec["milestones"]]
@@ -1817,6 +1920,25 @@ def plan(spec_path: str | Path, goal: str, *, workspace: str = "",
         spec["name"] = slug
         echo(f"  name {raw_name!r} 不能直接当文件名（要 ASCII slug）——"
              f"已按 {slug} 落盘，长名字在 goal 里，不影响交付。")
+
+    # 批次身份 = 状态文件名，所以同名 = 共享进度。2026-09-30 彩排档实测：
+    # 本地假 supervisor 固定回 name="esc-flow"，于是新写的一格接上了另一个
+    # 落地目录里那批的进度（m1=done、m2=failed 说的是 ESC 关闭流程那一格），
+    # `run` 一上来就报"m2 之前失败了"，DELIVERY.md 写进了旧批次的目录 ——
+    # 一份"判据全绿"的交付讲的是别人的格子。这种假绿比红危险。
+    # 但**不拒**（地雷 35：判据留下，动作搬到程序这一边）：名字只是个文件名，而
+    # Planner 这一次调用已经花掉了，拒掉就是让人为一句话再付一次。
+    other_ws = _state_owned_elsewhere(spec["name"], ws, target)
+    if other_ws:
+        taken = str(spec["name"])
+        fresh = _free_batch_name(taken, target)
+        echo(f"  名字 {taken!r} 已经是另一个批次的状态文件"
+             f"（那一批的落地目录：{other_ws}）。\n"
+             f"   同名会让这一批读到旧批次的进度（哪一格 done、合过哪个 commit），"
+             f"所以这一批改用 {fresh!r} 落盘，各记各的账 —— 不用重花调用。\n"
+             f"   确实要接着旧那一批跑，就用旧那一份项目档；它的账在 "
+             f"{_state_file(taken)}。")
+        spec["name"] = fresh
 
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(spec, ensure_ascii=False, indent=2) + "\n",

@@ -202,6 +202,26 @@ def test_verification_runner_does_not_stop_at_first_failure(tmp_path):
     assert results[1].passed is True
 
 
+def test_verification_runner_runs_a_bare_name_the_parent_path_does_not_have(
+        tmp_path, probe_console_script):
+    """声明的是 `pytest`，父进程 PATH 里没有它 —— 框架仍然要真的把它跑起来。
+
+    本机现场（2026-10-01 实测）：`pytest.exe` 就在跑着框架的那个解释器自己的目录里，
+    而面板/门禁/桌面版都是按绝对路径起解释器的，没有"激活 venv"那一步，于是
+    框架自跑的验收命令一条都没起来过。修的是**前提**，不是判据：换算只决定
+    "起哪一个二进制"，display 仍是声明原文，跑不起来照旧 passed=False。
+    """
+    _name, _here = probe_console_script("pytest")
+    runner = VerificationRunner()
+    results = runner.run([make_command("accept", ["pytest", "-c",
+                                                  "raise SystemExit(0)"])],
+                         cwd=tmp_path)
+    assert results[0].error is None, results[0].error
+    assert results[0].exit_code == 0 and results[0].passed is True
+    assert results[0].command_display == "pytest -c \"raise SystemExit(0)\"", \
+        "记录里那一行必须是声明原文，不能换成换算后的那一条"
+
+
 def test_verification_runner_summarize_reports_required_failures(tmp_path):
     runner = VerificationRunner()
     cmds = [

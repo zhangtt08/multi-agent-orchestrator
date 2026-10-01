@@ -1238,6 +1238,63 @@ class TestPlan:
         assert not target.exists(), "拒绝之后还留下了半个项目档"
         assert needle in _refused(capsys)
 
+    def test_a_name_owned_by_another_batch_renames_instead_of_sharing(self, repo,
+                                                                      tmp_path,
+                                                                      supervisor_replies,
+                                                                      capsys):
+        """批次身份 = 状态文件名，所以同名就是共享进度 —— 必须给这一批改名字。
+
+        彩排档实测（2026-09-30）：本地假 supervisor 固定回 `name="esc-flow"`，
+        于是"在项目根创建一份验收说明"这一批直接接上了另一个落地目录里那批的进度
+        （`runtime_batch/esc-flow.json` 里 m1=done、m2=failed 说的是 ESC 关闭流程
+        那一格），`run` 报的是"m2 之前失败了"，DELIVERY.md 写进了旧目录 ——
+        一个从未在本批跑过的格子顶着别人 done 的样子。假绿比红危险。
+        不拒（地雷 35：判据留下、动作搬到程序这一边，而 Planner 那次调用已经花掉）。
+        """
+        other_ws = tmp_path / "另一批的落地目录"
+        other_ws.mkdir(parents=True, exist_ok=True)
+        this_ws = tmp_path / "这一批的落地目录"
+        this_ws.mkdir(parents=True, exist_ok=True)
+        owned = bp.load_spec(write_spec(other_ws, name="esc-flow"))
+        bp.save_state(owned, bp.load_state(owned))   # 真实批次的状态文件就是这个形状
+        owned_state = bp.state_path(owned).read_text(encoding="utf-8")
+
+        supervisor_replies(plan_answer(name="esc-flow"))
+        target = this_ws / "验收说明.project.json"
+        capsys.readouterr()
+
+        assert bp.plan(target, "在项目根创建一份验收说明",
+                       workspace=str(this_ws), mock=True) == 0
+        spec = bp.load_spec(target)
+        assert spec["name"] != "esc-flow", "同名批次的进度被这一批读走了"
+        assert not bp._state_file(spec["name"]).exists(), "新身份该是没人占用的那一个"
+        assert bp.state_path(owned).read_text(encoding="utf-8") == owned_state, \
+            "改名字顺手动了旧批次的账"
+        assert bp.load_state(spec)["milestones"] == {}, "新批次带着旧批次的格子开局"
+
+        out = capsys.readouterr().out
+        assert "esc-flow" in out and "进度" in out, out
+        assert str(other_ws) in out, "要说清同名那个批次落在哪，人才知道要不要接着跑它"
+        assert spec["name"] in out, "改成了什么必须当面说，不能只在文件里"
+
+    def test_the_same_name_for_the_same_workspace_is_still_allowed(self, repo,
+                                                                  tmp_path,
+                                                                  supervisor_replies,
+                                                                  capsys):
+        """改名字只针对"同名不同落地目录" —— 重拆自己那批不许被换个身份。"""
+        ws = tmp_path / "同一目录"
+        ws.mkdir(parents=True, exist_ok=True)
+        mine = bp.load_spec(write_spec(ws, name="same-ws"))
+        bp.save_state(mine, bp.load_state(mine))
+
+        supervisor_replies(plan_answer(name="same-ws"))
+        target = ws / "again.project.json"
+        capsys.readouterr()
+        assert bp.plan(target, "把 calc.py 的 multiply 修对，其余不动",
+                       workspace=str(ws), mock=True) == 0
+        assert bp.load_spec(target)["name"] == "same-ws"
+        assert "改用" not in capsys.readouterr().out
+
     def test_non_json_garbage_is_one_sentence_and_writes_nothing(
             self, repo, supervisor_replies, capsys):
         supervisor_replies("这个需求信息不足，请先补充以下几点：……")
@@ -1585,3 +1642,86 @@ class TestDemoPreviewWiring:
             "python", "-c", "print(1)"]}}, str(repo),
             echo=lambda *a, **k: None)
         assert "preview" not in out
+
+
+class TestFrameworkCommandsGetTheirOwnInterpreterPath:
+    """框架**代跑**声明出来的那条命令时，那条命令必须真起得来（地雷 10 的另一半）。
+
+    本机现场：`C:\\Users\\...\\mao-venv\\Scripts\\pytest.exe` 确实存在，但从没激活
+    venv（面板、门禁、桌面版都是按绝对路径起解释器的），于是 Planner 写出来的
+    合法命令 `pytest -q` 报 WinError 2 —— 每一格的验收那一列都是"没跑成"。
+    修的是**前提**（程序自己把那个目录放到子进程 PATH 首位并按它换算命令名），
+    不是判据：跑不起来照旧记 None / not-run，绝不折成 0。
+    """
+
+    @pytest.fixture()
+    def probe(self, probe_console_script):
+        """一个"只有解释器自己那个目录里才有"的命令名（夹具细节在 conftest）。"""
+        name, here = probe_console_script("marker_probe")
+        return name, here
+
+    def test_a_bare_acceptance_command_actually_runs(self, repo, probe):
+        name, here = probe
+        ms = {"execution_workspace": str(repo)}
+        rc = bp.run_milestone_acceptance(
+            {"name": "t", "workspace": str(repo)}, ms,
+            f'{name} -c "raise SystemExit(0)"', echo=lambda *a, **k: None)
+        assert rc == 0, ms.get("acceptance_note")
+        assert str(here).lower() in str(ms["acceptance_resolved"]).lower()
+
+    def test_a_bare_final_acceptance_command_actually_runs(self, repo, probe):
+        name, _here = probe
+        spec = bp.load_spec(write_spec(
+            repo, final_acceptance={"name": "总验收", "command": [
+                name, "-c", "raise SystemExit(0)"]}))
+        state = bp.load_state(spec)
+        bp.milestone_state(state, "m1")["status"] = "done"
+        lines = []
+        assert bp.verify(spec, state, echo=lines.append) == 0
+        assert state["final"]["status"] == "pass", "".join(lines)
+
+    def test_a_command_that_is_nowhere_is_still_not_run_not_red(self, repo, probe):
+        """换算不许变成"救活"：真没有那条命令时，照旧是 not-run（地雷 10 那半边）。"""
+        _name, _here = probe
+        spec = bp.load_spec(write_spec(
+            repo, final_acceptance={"name": "nope", "command": [
+                "definitely-not-an-installed-executable-9f3c", "-q"]}))
+        state = bp.load_state(spec)
+        bp.milestone_state(state, "m1")["status"] = "done"
+        lines = []
+        assert bp.verify(spec, state, echo=lines.append) == 2
+        assert state.get("final", {}).get("status") != "fail"
+        assert any("起不来" in ln for ln in lines)
+        assert any("不在 PATH 上" in ln for ln in lines), "要说清去哪儿找了"
+
+
+class TestThePowerShellParseTrapIsNamed:
+    """`.ps1` 解析失败要说得出一句能照着做的话 —— 现场里那串报错是按 GBK 打的。
+
+    `usage-guide` 那批真实跑（2026-09-30 22:26）留下的执行工作区还在：交付物
+    《使用说明.md》写出来了，卡的是 `powershell -File tests/test_start.ps1` 这条
+    验收 —— 框架起得来它了（地雷 51），退出码却是 1，记录里只剩一串乱码 ParserError。
+    同份脚本补上 BOM 之后**仍然**报 ParserError，只是报错从第 9 行挪到第 21 行，
+    那一行是 `throw "“开始使用”没有分别说明…"` —— PS 5.1 把中文引号当收尾引号。
+    """
+
+    def test_the_brief_now_names_the_smart_quotes_too(self):
+        spec = {"name": "p", "workspace": ".", "milestones": [
+            {"id": "m1", "goal": "写一份使用说明",
+             "acceptance": "powershell -File tests/test_start.ps1"}]}
+        text = bp.goal_for(spec, spec["milestones"][0])
+        assert "带 BOM" in text
+        assert "中文引号" in text, "光说 BOM 不够 —— 实测补了 BOM 照样解析失败"
+
+    def test_a_parse_error_from_powershell_is_explained_not_just_dumped(self):
+        hint = bp._powershell_parse_hint(
+            ["powershell", "-File", "tests/t.ps1"],
+            "ParserError: UnexpectedToken 表达式或语句中包含意外的标记")
+        assert "中文引号" in hint and "BOM" in hint, hint
+
+    def test_the_same_words_from_another_command_are_not_relabelled(self):
+        """不许把别的命令的失败也说成"本机坑" —— 那会替执行者开脱。"""
+        assert bp._powershell_parse_hint(
+            ["pytest", "-q"], "ParserError: UnexpectedToken") == ""
+        assert bp._powershell_parse_hint(
+            ["powershell", "-File", "tests/t.ps1"], "缺少《使用说明.md》。") == ""

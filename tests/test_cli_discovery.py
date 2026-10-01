@@ -13,6 +13,8 @@
 from __future__ import annotations
 
 import os
+import shutil
+import sys
 from pathlib import Path
 
 import pytest
@@ -271,3 +273,109 @@ def test_discovery_layer_never_spawns_processes():
     assert "import subprocess" not in source
     assert "Popen" not in source
     assert "run_once" not in source
+
+
+# ---------------------------------------------------------------------------
+# 框架**代跑**验收/验证命令时给子进程的那份环境（地雷 10 的另一半）
+# ---------------------------------------------------------------------------
+def _probe_dir(tmp_path, monkeypatch):
+    """把"当前解释器自己的目录"换成一个临时目录，里面放一个真能跑的可执行文件。
+
+    复制的必须是**base** 解释器：venv 里那个 `Scripts/python.exe` 是靠
+    `pyvenv.cfg` 找到标准库的，抄到别处就跑不起来。
+    """
+    here = tmp_path / "fake_scripts"
+    here.mkdir(parents=True, exist_ok=True)
+    src = Path(getattr(sys, "_base_executable", "") or sys.executable)
+    name = "marker_probe.exe" if os.name == "nt" else "marker_probe"
+    dst = here / name
+    shutil.copy2(str(src), str(dst))
+    try:
+        dst.chmod(0o755)
+    except OSError:
+        pass
+    monkeypatch.setattr(ex, "interpreter_scripts_dir", lambda: str(here))
+    return here, name
+
+
+class TestFrameworkCommandEnv:
+    def test_the_interpreter_own_dir_is_prepared_exactly_once(self, monkeypatch):
+        monkeypatch.setenv("MAO_PROBE_VAR", "keep-me")
+        env = ex.framework_command_env()
+        here = ex.interpreter_scripts_dir()
+        keys = [k for k in env if k.upper() == "PATH"]
+        assert len(keys) == 1, "两份大小写不同的 PATH 会让子进程读到哪一份说不清"
+        assert env[keys[0]].split(os.pathsep)[0] == here
+        assert env["MAO_PROBE_VAR"] == "keep-me"      # 别的键不许丢
+
+        # 已经激活过 venv（那个目录本来就在 PATH 上）时不许插第二份
+        again = ex.framework_command_env({keys[0]: env[keys[0]]})
+        parts = [p for p in again[keys[0]].split(os.pathsep) if p.lower() == here.lower()]
+        assert len(parts) == 1
+
+    def test_a_bare_command_name_is_resolved_through_the_child_path(self, tmp_path,
+                                                                   monkeypatch):
+        here, name = _probe_dir(tmp_path, monkeypatch)
+        # 父进程 PATH 里没有它 —— 这正是业主那台机器的现场（没激活 venv）
+        monkeypatch.setenv("PATH", str(tmp_path / "nothing_here"))
+        (tmp_path / "nothing_here").mkdir(exist_ok=True)
+        argv, note = ex.framework_command_argv([name[:-4] if os.name == "nt" else name,
+                                               "-c", "raise SystemExit(0)"])
+        assert argv[0].lower() == str(here / name).lower(), argv
+        assert "→" in note and str(here) in note, \
+            "换算过就要留下痕迹，否则读记录的人以为跑的是别的"
+
+    def test_an_explicit_path_is_never_rescued_from_the_path(self, tmp_path, monkeypatch):
+        """§19：显式给的路径坏了，不许去 PATH 上找同名二进制来救活。"""
+        _here, name = _probe_dir(tmp_path, monkeypatch)
+        broken = str(tmp_path / "does_not_exist" / name)
+        argv, note = ex.framework_command_argv([broken, "--version"])
+        assert argv == [broken, "--version"] and note == ""
+
+    def test_an_unresolvable_name_is_handed_over_unchanged(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("PATH", str(tmp_path))
+        argv, note = ex.framework_command_argv(["definitely_not_a_tool", "-q"])
+        assert argv == ["definitely_not_a_tool", "-q"] and note == ""
+
+    @pytest.mark.skipif(
+        not (Path(sys.executable).parent
+             / ("pytest.exe" if os.name == "nt" else "pytest")).exists(),
+        reason="这个解释器的目录里没有 pytest 控制台脚本，本机不适用")
+    def test_pytest_resolves_even_with_the_parent_path_stripped(self, monkeypatch,
+                                                                tmp_path):
+        """本机那台现场的直接回归：`pytest -q` 是合法命令，缺的只是激活 venv。"""
+        scripts = str(Path(sys.executable).parent).lower()
+        monkeypatch.setenv("PATH", os.pathsep.join(
+            p for p in os.environ["PATH"].split(os.pathsep)
+            if p.lower() != scripts))
+        assert shutil.which("pytest") is None, "前提不成立：这条 PATH 里本来就有 pytest"
+        env = ex.framework_command_env()
+        argv, note = ex.framework_command_argv(["pytest", "-q"], env)
+        assert Path(argv[0]).name.lower().startswith("pytest")
+        assert str(Path(sys.executable).parent).lower() in argv[0].lower()
+
+
+def test_the_binding_answer_does_not_depend_on_how_mao_was_launched(
+        tmp_path, monkeypatch):
+    r"""第一屏那句"这个角色绑的是哪个 CLI"，双击起与终端起必须是同一个答案。
+
+    实测（2026-10-01）：按注册表 machine+user 原样重建的"双击 PATH"里没有跑框架的那个
+    venv，而角色解析与登录态结论和从终端起完全一致（三个角色都指到
+    `Roaming\npm\codex.cmd`，`Logged in using ChatGPT`）。这条锁住那个一致性 ——
+    业主的第一个问题（"我在哪里设置调用哪个 agent"）不该取决于他怎么打开软件。
+    """
+    bin_dir = tmp_path / "cli_bin"
+    real = _make_exec(bin_dir, "maoprobecodex")
+    profile = HarnessProfile(name="maoprobecodex", command="maoprobecodex")
+
+    only_cli = str(bin_dir)
+    with_venv = os.pathsep.join([str(bin_dir), str(Path(sys.executable).parent)])
+    monkeypatch.setenv("PATH", only_cli)
+    bare = ex.resolve_profile_command(profile)
+    monkeypatch.setenv("PATH", with_venv)
+    wide = ex.resolve_profile_command(profile)
+
+    assert bare.found and wide.found, (bare.reason, wide.reason)
+    assert Path(bare.path).samefile(Path(wide.path)), \
+        f"同一个声明，两种启动环境给出两个可执行文件：{bare.path} vs {wide.path}"
+    assert bare.source == wide.source == ex.SOURCE_PATH

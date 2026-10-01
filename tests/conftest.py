@@ -6,6 +6,9 @@
 
 from __future__ import annotations
 
+import glob
+import os
+import shutil
 import sys
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -75,3 +78,35 @@ def build(config, tmp_path: Path, echo=None, prompts: Optional[PromptLibrary] = 
         prompts=prompts or PromptLibrary(),
         echo=echo if echo is not None else (lambda _m: None),
     )
+
+@pytest.fixture
+def probe_console_script(tmp_path, monkeypatch):
+    """造一个"只活在解释器自己那个目录里"的控制台脚本，并把那一个目录换进来。
+
+    给"框架代跑声明出来的那条命令"这一族测试用（AGENTS.md 地雷 10 的另一半）：
+    被测的是**解析与换算**，所以那条命令必须"在别处找不到"又"真的能跑"。
+    Windows 上 exe 是按自己所在目录找 DLL 的，所以只 copy `python.exe` 会拿到
+    0xC0000135（DLL 找不到）—— 同目录的 `*.dll` 要一起带上；复制的必须是
+    **base** 解释器，venv 那个 `Scripts/python.exe` 靠 `pyvenv.cfg` 找标准库，
+    抄到别处就跑不动。
+    """
+    def install(name_stem: str):
+        from mao.harness.discovery import executable as ex
+
+        here = tmp_path / "interpreter_dir"
+        here.mkdir(parents=True, exist_ok=True)
+        src = Path(getattr(sys, "_base_executable", "") or sys.executable)
+        name = name_stem + (".exe" if os.name == "nt" else "")
+        shutil.copy2(str(src), str(here / name))
+        for dll in glob.glob(str(src.parent / "*.dll")):
+            shutil.copy2(dll, str(here / Path(dll).name))
+        try:
+            (here / name).chmod(0o755)
+        except OSError:
+            pass
+        monkeypatch.setattr(ex, "interpreter_scripts_dir", lambda: str(here))
+        assert shutil.which(name_stem) is None,             "前提不成立：这台机器的 PATH 里本来就有 " + name_stem
+        return name_stem, here
+
+    return install
+

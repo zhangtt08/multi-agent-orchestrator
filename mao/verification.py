@@ -30,6 +30,8 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 from .core.models import VerificationCommand, VerificationResult
+from .harness.discovery.executable import (framework_command_argv,
+                                           framework_command_env)
 from .transports.process import run_once
 
 # 常见"会改坏环境"的可执行文件，默认拒绝（除非显式放行）
@@ -157,10 +159,15 @@ class VerificationRunner:
                 error=f"policy: {denied}",
             )
 
+        # 框架代跑的那一条命令走这一份环境：把"跑着框架的解释器自己的目录"补进
+        # PATH 首位，并按那一份 PATH 把命令名换算掉（Windows 上 CreateProcess 用
+        # 调用方的 PATH 找可执行文件，光改 env 不够）。命令白名单与 display
+        # 都按**声明原文**判/写 —— 换算只影响"起哪一个二进制"，不影响结论。
+        child_env = framework_command_env(self.env_overrides)
         result = run_once(
-            command.command,
+            framework_command_argv(command.command, child_env)[0],
             cwd=Path(cwd) if cwd else None,
-            env=self.env_overrides,
+            env=child_env,
             timeout=timeout,
         )
 

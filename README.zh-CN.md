@@ -309,7 +309,7 @@ requirements*.txt        三层依赖
 ## 测试与验证
 
 ```powershell
-pytest                                    # 1375 条（v1.9.17 数出来的 tests=；工作树里若有别人未提交的文件会另有增减），默认排除需要额度的 real_harness
+pytest                                    # 1404 条（2026-10-01 数出来的 tests=；工作树里若有别人未提交的文件会另有增减），默认排除需要额度的 real_harness
 python tools\baseline_count.py            # 逐文件计数（以 JUnit 为权威，不信终端点数）
 python tools\unattended_e2e.py --one      # 零配额走完无人值守整链：真写文件 → 真补丁 →
                                           # 证据闸门 → 自动合入 → DELIVERY.md；判据不成立就非零退出

@@ -806,7 +806,9 @@ class Orchestrator:
                 extra["raw_excerpt"] = raw[:2000]
             err = getattr(response, "error", None)
             if err:
-                extra["response_error"] = str(err)[:400]
+                # 1400 而不是 400：适配器现在把 CLI 的 stderr 尾巴接在这句话后面，
+                # 截到 400 就正好把"为什么失败"那一段切掉（地雷 44 的形状）。
+                extra["response_error"] = str(err)[:1400]
         return extra or None
 
     def _cwd_for(self, role: Role) -> Optional[str]:
