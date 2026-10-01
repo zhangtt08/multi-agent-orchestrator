@@ -14,7 +14,7 @@
 ```
 
 刻意全在临时目录里跑：不写仓库的 runtime/，不碰任何已冻结的验收证据。
-默认用离线 Mock 档（`config_p10_offline`）；`--config-dir config` 会真的去调
+默认用离线 Mock 档（`archive/config-history/config_p10_offline`）；`--config-dir config` 会真的去调
 Codex/Claude 并烧配额，所以这里不允许——要验真实链路请用
 `tools/smoke_real_harness.py`，它需要你显式确认。
 
@@ -122,15 +122,15 @@ def main(argv: list[str] | None = None) -> int:
         try:
             from mao.core.config import load_config
 
-            config = load_config("config_p10_offline")
+            config = load_config("archive/config-history/config_p10_offline")
             if config.settings.dry_run:
                 s.fail("dry_run=true 会让自检看不到真实子进程行为")
             else:
-                s.pass_(f"config_p10_offline  checkpoint="
+                s.pass_(f"archive/config-history/config_p10_offline  checkpoint="
                        f"{config.settings.checkpoint.enabled}")
         except Exception as exc:  # noqa: BLE001
             s.fail(f"{type(exc).__name__}: {exc}",
-                   "检查 config_p10_offline/ 三份文件是否完整")
+                   "检查 archive/config-history/config_p10_offline/ 三份文件是否完整")
         steps.append(s)
         if not s.ok:
             return report(steps, tmp, args)
@@ -183,7 +183,7 @@ def main(argv: list[str] | None = None) -> int:
                                      # Mock Adapter 按剧本走；不给剧本它就用默认
                                      # 剧情（一直 FAIL），那测的是剧本不是链路。
                                      "acceptance_script": "immediate_pass"})
-                rt = service.submit(task, config_dir="config_p10_offline")
+                rt = service.submit(task, config_dir="archive/config-history/config_p10_offline")
                 rt_id, task_id = rt.runtime_task_id, rt.task_id
                 s.pass_(f"{rt_id} status={rt.status.value} "
                         f"strategy={getattr(rt, 'workspace_strategy', '')}")
@@ -205,7 +205,7 @@ def main(argv: list[str] | None = None) -> int:
             repo = build_repo_from_config(config)
             try:
                 sched = build_scheduler_from_config(
-                    config, repo, config_dir="config_p10_offline")
+                    config, repo, config_dir="archive/config-history/config_p10_offline")
                 # echo 的默认值本身就是 no-op；显式传 None 会炸在 echo(...) 上。
                 sched.run(max_ticks=60, poll_seconds=0.2,
                           with_heartbeat=False,

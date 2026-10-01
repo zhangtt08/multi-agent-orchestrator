@@ -209,7 +209,7 @@ def _usage_from_trace(trace: list) -> dict:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="阶段四 双 Harness 闭环 Demo")
     parser.add_argument("--scenario", choices=sorted(SCENARIOS), default="single")
-    parser.add_argument("--config-dir", default="config_p4")
+    parser.add_argument("--config-dir", default="archive/config-history/config_p4")
     parser.add_argument("--runtime-dir", default="runtime_p4")
     args = parser.parse_args(argv)
 

@@ -67,7 +67,7 @@ def _scheduler(repo, attempts_root, store, crash_hook=None):
                                  max_delay_seconds=2, jitter_seconds=0),
         attempts_root=attempts_root, worker_id=f"p10_{LEASE_SECONDS}",
         checkpoint_store=store, checkpoint_config=CheckpointConfig(**CP_CFG),
-        default_config_dir="config_offline")
+        default_config_dir="archive/config-history/config_offline")
 
 
 def _task():
@@ -87,7 +87,7 @@ def role_crash(root: Path) -> int:
     clock, repo, submission, _cfg, attempts_root, store = _env(root)
     hook = CrashInjector(crash_after_stage=CRASH_AFTER)
     sched = _scheduler(repo, attempts_root, store, crash_hook=hook)
-    rt = submission.submit(_task(), config_dir="config_offline")
+    rt = submission.submit(_task(), config_dir="archive/config-history/config_offline")
     # 不捕获：InjectedCrash 冒穿出 main -> 解释器非零退出（真进程死亡）
     sched.tick()
     # 走到这里说明钩子没有触发 —— 明确失败，别让测试以为"崩过了"

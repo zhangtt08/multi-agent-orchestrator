@@ -21,9 +21,9 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
 def _real_registry() -> ProfileRegistry:
-    """从 config_p3 载入 Profile。走 load_config 以保证与运行时同一路径。"""
+    """从 archive/config-history/config_p3 载入 Profile。走 load_config 以保证与运行时同一路径。"""
     from mao.core import load_config
-    return load_config(str(PROJECT_ROOT / "config_p3")).profile_registry()
+    return load_config(str(PROJECT_ROOT / "archive/config-history/config_p3")).profile_registry()
 
 
 # ===========================================================================
@@ -65,7 +65,7 @@ class TestReworkDesign:
 # ===========================================================================
 class TestSessionResumeHonesty:
     def test_real_profile_declares_no_resume(self):
-        """config_p3 的真实 Executor Profile 必须声明 resume_strategy: none。
+        """archive/config-history/config_p3 的真实 Executor Profile 必须声明 resume_strategy: none。
 
         理由：CLI 的 --resume / --session-id 开关**存在**，但本机无法验证
         真实续接效果（账号不可用，产生不了可续接的成功会话）。
@@ -159,6 +159,6 @@ class TestRealProfileIsYamlOnly:
     def test_no_embedded_credentials_in_config(self):
         """配置文件里绝不允许出现真实密钥。"""
         for name in ("harness.yaml", "agents.yaml", "settings.yaml"):
-            text = (PROJECT_ROOT / "config_p3" / name).read_text(encoding="utf-8")
+            text = (PROJECT_ROOT / "archive/config-history/config_p3" / name).read_text(encoding="utf-8")
             assert "sk-ant-api" not in text, f"{name} 含明文密钥"
             assert "ANTHROPIC_AUTH_TOKEN" not in text or "redacted" in text.lower()

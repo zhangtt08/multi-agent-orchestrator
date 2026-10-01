@@ -111,7 +111,7 @@ class TestGitignoreAnchoring:
         "runtime_p7/",
         "workspaces/",
         "workspace/",
-        "config_p7/local.yaml",
+        "archive/config-history/config_p7/local.yaml",
         "runtime_scheduler/",
     ])
     def test_runtime_data_stays_ignored(self, runtime_dir: str):
@@ -227,20 +227,25 @@ class TestSourcePackageTrackedGuard:
         )
 
     def test_prompts_and_configs_tracked(self):
-        """Prompt 模板与阶段配置也是运行所需 —— 同样必须入库。
+        """Prompt 模板与配置目录也是运行所需 —— 同样必须入库。
 
-        覆盖全部 config_p* 目录（2026-09-25 Audit S 教训：新建的
+        覆盖全部 config 目录（2026-09-25 Audit S 教训：新建的
         config_p9 曾漏 add —— fresh clone 里 doctor 直接
         "config file not found"，历史阶段同样可能迁移时才炸）。
+        阶段性历史档（config_p2 … config_p10、离线 Mock 档）自 2026-10-02 起住在
+        `archive/config-history/` 下 —— 搬家不改变"它们也必须入库"这条判据，
+        所以这里同时扫两处，判据看的是**内容清单**而不是目录在根上还是归档里。
         """
         _require_git()
         tracked = set(_git("ls-files").stdout.splitlines())
-        config_dirs = sorted(
-            p.name for p in PROJECT_ROOT.glob("config*") if p.is_dir())
-        assert "config_p9" in config_dirs, "config_p9 目录意外缺失"
+        roots = [PROJECT_ROOT / "config", PROJECT_ROOT / "archive" / "config-history"]
+        config_dirs = sorted(p for r in roots if r.is_dir()
+                             for p in ([r] + sorted(d for d in r.iterdir()
+                                                    if d.is_dir())))
+        names = {d.name for d in config_dirs}
+        assert "config_p9" in names, "config_p9 目录意外缺失（archive/config-history/）"
         missing: list[str] = []
-        for sub in ("prompts", *config_dirs):
-            root = PROJECT_ROOT / sub
+        for root in [PROJECT_ROOT / "prompts", *config_dirs]:
             for f in root.rglob("*"):
                 if f.is_file() and not f.name.endswith(".pyc"):
                     rel = f.relative_to(PROJECT_ROOT).as_posix()
@@ -271,13 +276,13 @@ _SMOKE_SCRIPT = textwrap.dedent("""
     from mao.memory import build_memory_layer
 
     # enabled=false -> 整层缺席（§35/§47）
-    cfg = load_config("config_p7")
+    cfg = load_config("archive/config-history/config_p7")
     cfg.settings.memory.enabled = False
     assert build_memory_layer(cfg) is None, "enabled=false 应返回 None"
 
     # enabled=true -> 层可构造（语义层允许缺席：fresh clone 无 ML venv，
     # provider 不可用 -> hybrid=None，SQLite 层独立工作，§12 降级）
-    cfg = load_config("config_p7")
+    cfg = load_config("archive/config-history/config_p7")
     cfg.settings.memory.enabled = True
     cfg.settings.memory.path = "./memory/memory.db"
     layer = build_memory_layer(cfg)
@@ -363,7 +368,7 @@ _SCHEDULER_SMOKE_SCRIPT = textwrap.dedent("""
     from mao.checkpoints import (CheckpointRecord, CheckpointStage,
                                  CheckpointStatus, ResumeManager,
                                  SQLiteCheckpointStore)
-    for _dir in ("config_p10", "config_p10_offline"):
+    for _dir in ("archive/config-history/config_p10", "archive/config-history/config_p10_offline"):
         _cfg = _load(_dir, require_harness_file=False)
         assert _cfg.settings.checkpoint.enabled is True, _dir
 

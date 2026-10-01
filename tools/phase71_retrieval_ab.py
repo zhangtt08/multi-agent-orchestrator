@@ -17,7 +17,7 @@
     MEMORY_EMBEDDING_MODEL_PATH=BAAI/bge-m3
     MEMORY_EMBEDDING_INTERPRETER=<ml venv python>
     MEMORY_HF_HOME=<HF 缓存目录>
-    python tools/phase71_retrieval_ab.py --config-dir config_p7
+    python tools/phase71_retrieval_ab.py --config-dir archive/config-history/config_p7
 """
 
 from __future__ import annotations
@@ -115,7 +115,7 @@ def _by_id(rows: list[dict], memory_id: str) -> dict | None:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config-dir", default="config_p7")
+    parser.add_argument("--config-dir", default="archive/config-history/config_p7")
     parser.add_argument("--json-out", default="runtime_p7/phase71_ab.json")
     args = parser.parse_args()
 

@@ -22,7 +22,7 @@
     - artifact：workspace_result.json + changes.patch 存在（§22）
 
 用法：
-    python tools/phase9_concurrent_demo.py --config-dir config_p9
+    python tools/phase9_concurrent_demo.py --config-dir archive/config-history/config_p9
     python tools/phase9_concurrent_demo.py --fresh        # 重建 demo repo 基线
     python tools/phase9_concurrent_demo.py --cleanup      # Demo 后清理 worktree
                                                           # （默认 preserve，§23）
@@ -264,7 +264,7 @@ def cleanup_worktrees(config_dir: str) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--config-dir", default="config_p9")
+    parser.add_argument("--config-dir", default="archive/config-history/config_p9")
     parser.add_argument("--source-repo", default=None,
                         help="demo source repo（默认 workspaces/"
                              "concurrency-demo-src，不存在则自动创建）")

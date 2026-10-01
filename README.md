@@ -76,20 +76,22 @@ Results land in `runtime/<rt-id>/attempt<N>/`: `artifacts/changes.patch`, worksp
 ```
 mao/           core package: orchestrator, agents, transports, harness,
                memory, scheduler, workspaces, checkpoints
-config/        production config (default --config-dir config)
-config_offline/  all-mock offline config — no CLI needed
-examples/      runnable example project (with a planted bug) + task files
+config/          production config (default --config-dir config)
+archive/config-history/  phase snapshots + the all-mock offline config — kept so the
+               acceptance runs of those phases stay reproducible; not an entry point
+examples/      runnable example project (with a planted bug) + task files +
+               config_minimal (zero-quota minimal config)
 tools/         doctor / smoke tests / batch runner / delivery viewer / release check
-tests/         1404 passing + 5 skipped (2026-10-01 measurement; the default run
+tests/         1404 passing + 5 skipped (2026-10-02 measurement; the default run
                excludes 8 quota-consuming real_harness tests)
-docs/          user guide, operator guide, troubleshooting, architecture
+docs/          user guide, operator guide, troubleshooting, architecture, RELEASE.md
 main.py        CLI entry
 VERSION        single source of version truth (1.9.17)
 ```
 
 Core depends on exactly two packages (pydantic + PyYAML) — every module imports and works without numpy / faiss / torch; the semantic layer (`requirements-semantic.txt` + `tools\setup_embeddings.py`, pinned torch 2.6.0+cpu) is an opt-in venv.
 
-More: `docs/USER_GUIDE.md` (install, commands), `docs/OPERATOR_GUIDE.md` (leases, recovery, capacity), `docs/TROUBLESHOOTING.md` (by symptom), `docs/ARCHITECTURE.md` (layers, protocols, adding a harness). Progress and verification: `RELEASE_NOTES_v1.0.0.md`, `RELEASE_MANIFEST.md`, `AGENTS.md`.
+More: `docs/USER_GUIDE.md` (install, commands), `docs/OPERATOR_GUIDE.md` (leases, recovery, capacity), `docs/TROUBLESHOOTING.md` (by symptom), `docs/ARCHITECTURE.md` (layers, protocols, adding a harness). Release battery, package contents and known boundaries: `docs/RELEASE.md`; per-round records: `docs/history/RELEASE_NOTES.md`; working constraints for agents: `AGENTS.md`.
 
 ## 📄 License
 

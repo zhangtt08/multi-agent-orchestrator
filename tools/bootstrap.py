@@ -42,7 +42,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--config-dir", default="config",
                         help="要检查哪份配置（默认生产配置 config/）")
     parser.add_argument("--offline", action="store_true",
-                        help="按离线档检查（config_offline，不需要任何真实 CLI）")
+                        help="按离线档检查（archive/config-history/config_offline，不需要任何真实 CLI）")
     args = parser.parse_args(None if argv is None else argv[1:])
 
     if sys.stdout.encoding and sys.stdout.encoding.lower() not in ("utf-8", "utf8"):
@@ -53,7 +53,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     from tools.env_report import FAIL, OK, WARN, collect
 
-    config_dir = "config_offline" if args.offline else args.config_dir
+    config_dir = "archive/config-history/config_offline" if args.offline else args.config_dir
     report = collect(config_dir)
     worst = report.worst()
 

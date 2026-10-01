@@ -19,8 +19,19 @@ from tools import workbench_ui as ui
 
 
 class Runner:
+    """替身按**真类的形状**给：`SchedulerRunner.running` 是方法不是属性。
+
+    以前这里是 `self.running = running`（一个布尔属性），于是
+    `getattr(ctx.runner, "running", False)` 在生产里拿到的是恒真的 bound method、
+    在测试里拿到的是真布尔 —— 矩阵全绿而页面在撒谎（AGENTS.md 地雷 30 的原话）。
+    断言一个字没动，动的是夹具与真接口的形状差。
+    """
+
     def __init__(self, running):
-        self.running = running
+        self._running = running
+
+    def running(self):
+        return self._running
 
 
 def _ctx(running=False):
@@ -61,6 +72,24 @@ class TestAgentActivityLine:
         """条数必须来自传进来的行，不许是写死的。"""
         assert "2 条" in line(True, [{"runtime_task_id": "a", "status": "RUNNING"},
                                      {"runtime_task_id": "b", "status": "RUNNING"}])
+
+    def test_the_real_runner_class_is_the_sentinel_not_the_double(self):
+        """用**真** SchedulerRunner（没 start 过）问一次，必须是"调度器没启动"那一支。
+
+        替身给的是形状，真类给的才是判据：bound method 恒真那一次（地雷 30）
+        矩阵全绿、生产里调度器从来没起来过。这条哨兵拿的是产品自己那个类，
+        把 `.running` 当属性读就当场红。
+        """
+        from tools.scheduler_cli import SchedulerRunner
+
+        ctx = SimpleNamespace(config_dir="config",
+                              runner=SchedulerRunner("config"),
+                              real_roles=True, default_strategy="COPY",
+                              last_go={}, last_form={}, last_plan={})
+        text = ui.agent_activity_line(
+            ctx, [{"runtime_task_id": "rt-1", "status": "QUEUED"}])
+        assert "调度器没启动" in text, text
+        assert "在跑" not in text, text
 
 
 class TestPlannedCardCanStart:

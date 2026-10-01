@@ -40,8 +40,8 @@ from mao.harness import ProfileRegistry  # noqa: E402
 from mao.transports import TransportRegistry  # noqa: E402
 from mao.transports.subprocess_transport import SubprocessTransport  # noqa: E402
 
-CONFIG_P2 = PROJECT_ROOT / "config_p2"
-CONFIG_P3 = PROJECT_ROOT / "config_p3"
+CONFIG_P2 = PROJECT_ROOT / "archive/config-history/config_p2"
+CONFIG_P3 = PROJECT_ROOT / "archive/config-history/config_p3"
 
 
 # ---------------------------------------------------------------------------
@@ -263,7 +263,7 @@ class TestThirdPartyTransportSafety:
 # ===========================================================================
 class TestRealConfigsAreNotAccidentallyDryRun:
     def test_config_p3_no_longer_needs_the_workaround(self):
-        """config_p3 的 executor 刻意**不写** transport_options 覆盖。
+        """archive/config-history/config_p3 的 executor 刻意**不写** transport_options 覆盖。
 
         修复后 settings.dry_run=False 应当自动生效；
         如果这条失败，说明 §0 的修复被回退了。
@@ -279,11 +279,11 @@ class TestRealConfigsAreNotAccidentallyDryRun:
         agent = orch.registry.get(Role.EXECUTOR)
         assert agent.dry_run is False
         assert agent.transport.dry_run is False, (
-            "config_p3 未显式覆盖 dry_run，但 Transport 仍是 dry-run —— §0 修复失效"
+            "archive/config-history/config_p3 未显式覆盖 dry_run，但 Transport 仍是 dry-run —— §0 修复失效"
         )
 
     def test_config_p2_explicit_override_still_works(self):
-        """config_p2 显式写了 dry_run: false，行为不能变。"""
+        """archive/config-history/config_p2 显式写了 dry_run: false，行为不能变。"""
         from mao.bootstrap import build_orchestrator
         from mao.core import load_config
 

@@ -85,8 +85,8 @@ def test_worker_uses_task_persisted_config_dir(tmp_path):
     """
     clock, repo, submission, store = _env(tmp_path)
     rt = submission.submit(make_task(script="immediate_pass"),
-                           config_dir="config_p10")
-    assert rt.config_dir == "config_p10"
+                           config_dir="archive/config-history/config_p10")
+    assert rt.config_dir == "archive/config-history/config_p10"
 
     # 销毁全部内存对象，只留下磁盘上的 queue.db
     del submission, repo, clock
@@ -96,28 +96,28 @@ def test_worker_uses_task_persisted_config_dir(tmp_path):
     sched = _scheduler(tmp_path, clock2, repo2, store,
                        _recording_factory(seen))
     row = repo2.get(rt.runtime_task_id)
-    assert row.config_dir == "config_p10", "config_dir 未持久化进任务行"
+    assert row.config_dir == "archive/config-history/config_p10", "config_dir 未持久化进任务行"
 
     sched._build_orchestrator(tmp_path / "rt" / "x", row, None, attempt=1)
-    assert seen == ["config_p10"], (
+    assert seen == ["archive/config-history/config_p10"], (
         f"worker 装配用了错误的 config：{seen}（真相源应是任务行的 config_dir）")
-    assert row.config_dir == "config_p10"
+    assert row.config_dir == "archive/config-history/config_p10"
 
 
 def test_worker_config_dir_implies_checkpoint_enabled(tmp_path):
     """§41：解析到任务持久化的 config 后，checkpoint 必须是开启的。
 
-    这条是 config_p8 硬编码的直接反证：worker 若回退到旧阶段配置，
+    这条是写死阶段性历史档 config_p8 的直接反证：worker 若回退到旧阶段配置，
     checkpoint.enabled 会变成 false，Resume 静默失效。
     """
     from mao.core.config import load_config
 
-    cfg = load_config("config_p10", require_harness_file=False)
+    cfg = load_config("archive/config-history/config_p10", require_harness_file=False)
     assert cfg.settings.checkpoint.enabled is True
     # 反例用离线档：它和生产配置一样是"给 worker 用的 config"，但没有 checkpoint
     # 段 —— 正好模拟"回退到一份不认识 checkpoint 的旧配置"。
     # （config/ 从 v1.0 起是生产配置，checkpoint 是开的，不再适合当这个反例。）
-    legacy = load_config("config_offline", require_harness_file=False)
+    legacy = load_config("archive/config-history/config_offline", require_harness_file=False)
     assert bool(getattr(legacy.settings, "checkpoint", None)) is False or \
         getattr(legacy.settings.checkpoint, "enabled", False) is False
     # 生产配置必须开着，否则这条反例就没有对照，整段断言会失去意义
@@ -133,10 +133,10 @@ def test_legacy_task_without_config_dir_falls_back_loudly(tmp_path):
     repo._update_fields(rt.runtime_task_id, config_dir="", config_profile="")
     seen: list = []
     sched = _scheduler(tmp_path, clock, repo, store, _recording_factory(seen),
-                       default_config_dir="config_offline")
+                       default_config_dir="archive/config-history/config_offline")
     row = repo.get(rt.runtime_task_id)
     sched._build_orchestrator(tmp_path / "rt" / "x", row, None, attempt=1)
-    assert seen == ["config_offline"], seen   # 回退到调度器默认目录
+    assert seen == ["archive/config-history/config_offline"], seen   # 回退到调度器默认目录
     events = [e["event"] for e in repo.events_for(rt.runtime_task_id)]
     assert SchedulerEventType.LEGACY_CONFIG_FALLBACK.value in events, events
 
@@ -167,7 +167,7 @@ def test_scheduler_recover_resumes_same_attempt(tmp_path):
     """§12：VERIFICATION 已提交 + lease 过期 -> recover 保号同 attempt。"""
     clock, repo, submission, store = _env(tmp_path)
     rt = submission.submit(make_task(script="immediate_pass"),
-                           config_dir="config_p10")
+                           config_dir="archive/config-history/config_p10")
     seen: list = []
     sched = _scheduler(tmp_path, clock, repo, store, _recording_factory(seen))
     repo.try_acquire_next("dead_worker", lease_seconds=120)   # attempt -> 1
@@ -217,7 +217,7 @@ def test_tick_and_manual_recover_share_one_decision_path(tmp_path):
     """§9：自动 stale recovery 与 CLI recover 必须是同一套判定代码。"""
     clock, repo, submission, store = _env(tmp_path)
     rt = submission.submit(make_task(script="immediate_pass"),
-                           config_dir="config_p10")
+                           config_dir="archive/config-history/config_p10")
     calls: list = []
     sched = _scheduler(tmp_path, clock, repo, store, _recording_factory(calls))
     repo.try_acquire_next("dead_worker", lease_seconds=120)

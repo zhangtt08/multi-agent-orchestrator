@@ -8,10 +8,10 @@
 #
 # 想先在不装任何 CLI 的机器上看这套东西怎么跑：用离线 Mock 档
 #
-#     --config-dir config_offline
+#     --config-dir archive/config-history/config_offline
 #
-# 历史阶段配置（config_p2 … config_p10）原样保留，用于复现当时的验收；
-# 日常使用不需要它们。
+# 历史阶段配置（config_p2 … config_p10）原样保留在 archive/config-history/ 下，
+# 用于复现当时的验收；日常使用不需要它们，也别把那个目录当入口用。
 #
 # ---------------------------------------------------------------------------
 # 机器相关路径一律走环境变量占位符，本文件里不出现任何用户目录。

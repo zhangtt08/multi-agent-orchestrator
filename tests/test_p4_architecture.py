@@ -102,7 +102,7 @@ class TestReviewerCapabilities:
     def _profile(self, name: str):
         from mao.core import load_config
 
-        config = load_config(str(PROJECT_ROOT / "config_p4"))
+        config = load_config(str(PROJECT_ROOT / "archive/config-history/config_p4"))
         return config.profile_registry().resolve(name)
 
     def test_codex_reviewer_declares_no_file_write(self):
@@ -195,18 +195,18 @@ class TestNoHardcodedUserPaths:
         import yaml
 
         offenders = []
-        for cfg in sorted((PROJECT_ROOT / "config_p4").glob("*.yaml")):
+        for cfg in sorted((PROJECT_ROOT / "archive/config-history/config_p4").glob("*.yaml")):
             data = yaml.safe_load(cfg.read_text(encoding="utf-8")) or {}
             for key_path, value in self._iter_values(data):
                 if self._USER_PATH.search(value):
                     offenders.append(f"{cfg.name}:{key_path} = {value}")
         assert not offenders, (
             f"配置**值**里出现用户绝对路径：{offenders}\n"
-            "应当改用 ${VAR} 占位（见 config_p4/harness.yaml）"
+            "应当改用 ${VAR} 占位（见 archive/config-history/config_p4/harness.yaml）"
         )
 
     def test_codex_path_uses_placeholder(self):
-        text = (PROJECT_ROOT / "config_p4" / "harness.yaml").read_text(
+        text = (PROJECT_ROOT / "archive/config-history/config_p4" / "harness.yaml").read_text(
             encoding="utf-8"
         )
         assert "${CODEX_CLI_PATH}" in text
@@ -233,7 +233,7 @@ class TestUsageStillGuarded:
     def test_config_p4_has_explicit_call_budget(self):
         from mao.core import load_config
 
-        config = load_config(str(PROJECT_ROOT / "config_p4"))
+        config = load_config(str(PROJECT_ROOT / "archive/config-history/config_p4"))
         limit = config.settings.effective_agent_call_limit()
         # 每轮最多 3 个角色调用；max_rounds=3 时必须够用
         assert limit >= config.settings.max_rounds * 3
@@ -267,7 +267,7 @@ class TestProviderSwap:
         from mao.core import Config, Role, Settings, load_config
         from mao.core.config import RoleBinding
 
-        base = load_config(str(PROJECT_ROOT / "config_p4"))
+        base = load_config(str(PROJECT_ROOT / "archive/config-history/config_p4"))
         settings = Settings(**{
             **base.settings.model_dump(),
             "runtime_dir": "runtime_p4test",

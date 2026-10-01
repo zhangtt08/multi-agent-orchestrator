@@ -13,7 +13,7 @@ from pathlib import Path
 sys.path.insert(0, ".")
 import tools.phase10_checkpoint_demo as m
 
-cfg = sys.argv[1] if len(sys.argv) > 1 else "config_p10"
+cfg = sys.argv[1] if len(sys.argv) > 1 else "archive/config-history/config_p10"
 ev_dir = Path(sys.argv[2]) if len(sys.argv) > 2 else Path(
     "runtime_p10/demo_evidence")
 saved = json.loads((ev_dir / "summary.json").read_text(encoding="utf-8"))

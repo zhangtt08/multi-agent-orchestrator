@@ -391,7 +391,7 @@ class TestCrashResumeEndToEnd:
             attempts_root=attempts_root, worker_id="p10_worker",
             checkpoint_store=store,
             checkpoint_config=FakeCpCfg(),
-            default_config_dir="config_offline")
+            default_config_dir="archive/config-history/config_offline")
 
     def _run_until_idle(self, sched, clock, repo, *, max_ticks=30,
                         advance_per_tick=200):
@@ -535,7 +535,7 @@ class TestCrashResumeEndToEnd:
             lease_timeout_seconds=120.0, heartbeat_seconds=15.0,
             attempts_root=attempts_root, worker_id="p10_pool",
             checkpoint_store=store, checkpoint_config=FakeCpCfg(),
-            default_config_dir="config_offline")
+            default_config_dir="archive/config-history/config_offline")
         sched.tick()     # A、B 同时 claim；A 在 PLAN 后 crash（进程死亡语义）
         assert repo.get(rt_a.runtime_task_id).status == RuntimeStatus.RUNNING
         assert _drain_pool(sched), "线程池未在限时内排空"
@@ -756,7 +756,7 @@ class TestResumeStillDelivers:
             attempts_root=attempts_root, worker_id="reattach_worker",
             checkpoint_store=store, checkpoint_config=FakeCpCfg(),
             workspace_manager=manager, default_strategy="GIT_WORKTREE",
-            default_config_dir="config_offline")
+            default_config_dir="archive/config-history/config_offline")
 
     def test_resume_reattaches_plan_and_collects_result(self, tmp_path):
         from mao.workspaces import WorkspacePlan, WorkspaceStrategy

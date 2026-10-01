@@ -82,7 +82,7 @@ harness.yaml    每个真实 CLI 的调用画像（命令、参数、prompt 怎�
 | 目录 | 是什么 | 需要真实 CLI |
 |---|---|---|
 | `config/` | **生产配置**（默认）。并发 1、每 provider 1 个调用、GIT_WORKTREE、checkpoint 开、记忆混合检索 | 是 |
-| `config_offline/` | 纯 Mock 角色的单任务演示配置 | 否 |
+| `archive/config-history/config_offline/` | 纯 Mock 角色的单任务演示配置 | 否 |
 | `examples/config_minimal/` | 最小可读配置，用 Mock 角色演示队列与 checkpoint | 否 |
 
 机器相关的路径**一律不写进配置**，走环境变量（`${VAR}` 形式在加载时展开）：
@@ -411,7 +411,7 @@ python tools\delivery_view.py --watch <rt-id> --config-dir config   # 跟着一�
 ```
 
 `--board` 回答"现在队列里都有什么、各自到哪一步了"；同一条任务被几份配置共用同一个
-队列库时只算一条（标 `≈config_p8`），因为那不是两次进度。`--watch` 每两秒读一次，
+队列库时只算一条（标 `≈archive/config-history/config_p8`），因为那不是两次进度。`--watch` 每两秒读一次，
 状态或 stage 一变就打一行——它是只读轮询，不建库、不改字节。
 
 输出只有两段：**需求交付了吗** 与 **状态稳定吗**，每条结论后面标来源：

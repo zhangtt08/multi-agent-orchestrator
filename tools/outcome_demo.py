@@ -8,7 +8,7 @@ Reviewer 收到「Evidence ownership」经验（真 BGE-M3 向量召回），返
 final score 带正向 adjustment —— 反馈真实进入下一次检索。
 
 运行（两次，§41）：
-    python tools/outcome_demo.py --config-dir config_p7 [--run N]
+    python tools/outcome_demo.py --config-dir archive/config-history/config_p7 [--run N]
 """
 
 from __future__ import annotations
@@ -69,7 +69,7 @@ def _resolve_codex_exe() -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config-dir", default="config_p7")
+    parser.add_argument("--config-dir", default="archive/config-history/config_p7")
     parser.add_argument("--run", type=int, default=1)
     parser.add_argument("--runtime-dir", default="runtime_p7")
     args = parser.parse_args()

@@ -14,7 +14,7 @@
     - 幂等：已有 override 的 usage 跳过，重复运行不产生重复样本
 
 用法：
-    python tools/phase71_outcome_history.py --config-dir config_p7 [--dry-run]
+    python tools/phase71_outcome_history.py --config-dir archive/config-history/config_p7 [--dry-run]
 """
 
 from __future__ import annotations
@@ -96,7 +96,7 @@ def _report(aggregator: OutcomeAggregator, memory_id: str, role: str,
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config-dir", default="config_p7")
+    parser.add_argument("--config-dir", default="archive/config-history/config_p7")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 

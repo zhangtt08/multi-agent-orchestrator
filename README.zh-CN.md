@@ -281,11 +281,13 @@ Known Windows compatibility: 在已验证环境上，更新版本的 torch 曾�
 mao/                     核心包（core / agents / transports / harness / memory
                          / scheduler / workspaces / checkpoints）
 config/                  生产配置（默认 --config-dir config）
-config_offline/          全 Mock 的离线配置（不需要任何 CLI）
+archive/config-history/  阶段性历史档（config_p2 … config_p10、config_p10_offline）与
+                         phase-1 的全 Mock 离线档 config_offline —— 留着复现当年验收，
+                         **不是入口**，也别删
 examples/                可运行的例子：带 bug 的小项目 + 任务文件 + 最小配置
 tools/                   运维与自检入口（bootstrap / doctor 同源检查 / 冒烟 / 发布校验）
 tests/                   测试（含仓库完整性守卫）
-docs/                    使用者、运维、排障、架构四份文档
+docs/                    使用者、运维、排障、架构四份文档 + 一份发布单 RELEASE.md
 main.py                  CLI 入口
 VERSION / mao.__version__ 版本单一来源
 requirements*.txt        三层依赖
@@ -301,8 +303,8 @@ requirements*.txt        三层依赖
 | 长期开着怎么运维（租约、恢复、容量、工作树、SQLite） | `docs/OPERATOR_GUIDE.md` |
 | 出问题了按症状查 | `docs/TROUBLESHOOTING.md` |
 | 内部怎么分层、数据协议、怎么加新 Harness / Adapter | `docs/ARCHITECTURE.md` |
-| 发布内容清单与校验项 | `RELEASE_MANIFEST.md`、`RELEASE_CHECKLIST.md` |
-| 这一版做了什么、验证到什么程度 | `RELEASE_NOTES_v1.0.0.md`、`docs/history/RELEASE_REPORT_v1.0.0.md` |
+| 发布电池、包里有什么/排除什么、已知边界 | `docs/RELEASE.md`（当前发布面的唯一入口） |
+| 这一版做了什么、验证到什么程度 | `docs/history/RELEASE_NOTES.md`（逐轮记录 v1.0.0 → 当前）、`docs/history/RELEASE_REPORT_v1.0.0.md` |
 | 你（人或 agent）要接手改这个项目 | `AGENTS.md` |
 | 它是怎么一步步做出来的（历史，不是使用文档） | 根目录 `docs/history/PHASE*_REPORT.md`、`git log` |
 

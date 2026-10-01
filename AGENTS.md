@@ -32,11 +32,19 @@ python main.py doctor              # 环境判定；可选组件缺席是 WARN�
 判据不在"`.venv` 目录在不在"，在"`.\.venv\Scripts\python.exe -c "import pytest"` 能不能成"。
 重建一份即可，别拿它当项目缺陷。
 
-- 默认配置目录是 `config/`（生产档）。`config_p2 … config_p10` 是阶段性历史档，
-  **不要当入口用**；`config_offline/` 是 phase-1 Mock 档，
-  `examples/config_minimal/` 是零配额最小可加载档。
+- 默认配置目录是 `config/`（生产档）。阶段性历史档（`config_p2 … config_p10`、
+  `config_p10_offline`、phase-1 的 Mock 档 `config_offline`）从 2026-10-02 起整体搬进
+  `archive/config-history/` —— 里面留着当时的验收现场，**不要当入口用**，也不要删；
+  `examples/config_minimal/` 是零配额最小可加载档（入口仍在那儿）。
+  搬动改的是**路径**，不是判据：`tests/test_p8_scheduler.py::TestOfflineQueueIsIsolated`
+  那两条隔离回归照旧成立，读得到这些目录的守卫见 `tests/test_repository_integrity.py`。
 - 每个配置有自己的队列库与运行目录。`--config-dir` 不带一致 = 在查另一个队列，
   任务看起来"消失了"。同一个会话里所有子命令带同一个值。
+  现在这条坑有三处机械兜底，别靠记性：① `queue list` 第一行就写清它读的是哪台配置的
+  哪个库（库还不存在时明说"这台配置没跑过任务"，并且**不再顺手把空库建出来**）；
+  ② 按 rt-id 查不到时报的是库路径（`_missing_task`）；
+  ③ `--config-dir` 打错不再是 traceback，而是一句"读不出来 + 可用配置目录清单"，
+  退出码按用法错误给 2（`main.py::_run_subcommand`）。
 - CLI 可执行文件不需要写进配置：走 `PATH` → 平台已知安装位置，判据统一在
   `mao/harness/discovery/executable.py`。**新增第二套发现逻辑就是下一个漂移 bug。**
 
@@ -253,6 +261,15 @@ Agent 自述  执行者说它做了什么 —— 只是供述
     而页面照样显示"调度器运行中"，因为 `render_scheduler` 那一处调用写的是对的 `running()`。
     测试替身用了 `@property`，所以矩阵全绿 —— 这是地雷 6 的同族：**判据不在"页面说的状态"，
     在"子进程真起来了没有"**。现在调用点一律 `running()`，替身也改成方法。
+    **2026-10-02 在同一份代码里又抓到第二次**，而且就在"说调度器状态"的那一格上：
+    `workbench_ui.agent_activity_line` 写的是
+    `bool(getattr(ctx.runner, "running", False))` —— bound method 恒真，于是调度器
+    根本没起来时，任务页照样说"调度器在跑但队列是空的"。替身把 `running` 存成布尔属性
+    （`tests/test_workbench_status.py`），矩阵又一次全绿。修法同前：调用点收进
+    `workbench_ui._runner_is_up()`（一律 `running()`），替身改成方法，
+    并加了一条**拿真 `SchedulerRunner` 当对象**的哨兵
+    `tests/test_workbench_status.py::test_the_real_runner_class_is_the_sentinel_not_the_double`
+    —— 替身只能测形状，判据要由真类来量（地雷 38"测试靠环境过关"的同一课）。
 
 31. **`git status --porcelain` 会把新建的未跟踪目录折叠成一项**（`src/hooks/`），所以
     `collect_result` 采到的 `changed_files` 与执行者自述的文件清单**必然不同** ——
@@ -704,8 +721,9 @@ Agent 自述  执行者说它做了什么 —— 只是供述
 | 有症状没原因（按症状 27 条） | `docs/TROUBLESHOOTING.md` |
 | 分层、数据协议、状态机、加 Harness 或 Adapter | `docs/ARCHITECTURE.md` |
 | 这一版验证到什么程度、发布后修了什么 | `docs/history/RELEASE_REPORT_v1.0.0.md`（§10 是 v1.0.1 补丁） |
-| 发布内容与排除项 | `RELEASE_MANIFEST.md`、`RELEASE_CHECKLIST.md` |
+| 发布电池、包里有什么/排除什么、已知边界 | `docs/RELEASE.md`（**唯一一份当前发布文档**；逐轮记录在 `docs/history/RELEASE_NOTES.md`，v1.0.0 那几轮的清单归档在 `docs/history/`） |
 | 各阶段当初怎么做出来的（历史，别当使用文档） | `docs/history/PHASE*_REPORT.md`、`git log` |
+| 阶段性历史配置档在哪 | `archive/config-history/`（**不是入口**，也别删 —— 里面是当年的验收现场） |
 
 ## 仓库约定
 

@@ -8,7 +8,7 @@
 #
 # 三个角色共用同一个 GenericCLIAdapter：差别只在 Profile（命令/参数/prompt
 # 投喂方式），所以换 Provider 只改这一份文件，核心代码一行不动。
-# 想先不装 CLI 体验整条链路：--config-dir config_offline（全 Mock）。
+# 想先不装 CLI 体验整条链路：--config-dir archive/config-history/config_offline（全 Mock）。
 # ===========================================================================
 
 supervisor:

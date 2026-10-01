@@ -122,6 +122,10 @@ button.danger{background:#dc2626}
 .grid>div{flex:1 1 320px;min-width:280px}
 .cost{background:#fffbeb;border:1px solid #fde68a;border-radius:10px;
 padding:11px 13px;font-size:12.5px;color:#78350f;margin:12px 0}
+.rowbtns{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.rowbtns button{margin-top:0;padding:5px 10px;font-size:12px;font-weight:500}
+.log{max-height:150px;overflow:auto}
+details>summary{cursor:pointer;color:#2563eb;font-size:12.5px}
 .notice{background:#eff6ff;border:1px solid #bfdbfe;border-left:3px solid #2563eb;
 border-radius:10px;padding:11px 13px;font-size:13px;margin:12px 0}
 .notice.bad{background:#fef2f2;border-color:#fecaca;border-left-color:#dc2626;
@@ -337,6 +341,47 @@ def worktree_records() -> List[Dict[str, str]]:
 # ---------------------------------------------------------------------------
 # 页面
 # ---------------------------------------------------------------------------
+def _spec_files() -> List[Path]:
+    """所有项目档（spec），不只是最近 6 个 —— 这一格要认得出**任意**一批的档在哪。
+
+    只读，不创建目录：批次那一页是"看一眼不许改动现场"的那一类
+    （tests/test_workbench_ui.py::test_runtime_batch_dir_is_not_created_by_looking）。
+    """
+    root = ROOTISH / "runtime_batch"
+    if not root.is_dir():
+        return []
+    found = [p for p in root.glob("*.project.json") if p.is_file()]
+    planned = root / "planned"
+    if planned.is_dir():
+        found += [p for p in planned.glob("*.project.json") if p.is_file()]
+    return sorted(set(found))
+
+
+def _spec_for_batch(name: str, workspace: str) -> str:
+    """状态文件 → 该项目档的路径。认不出就写"没找到"，绝不猜一个出去。
+
+    为什么值得单独一函数：`accept` / `run --retry` / `ship` 的 `--project` 要的是
+    **项目档**，而批次那一格读的是**状态文件**，两者同名不同后缀。以前页面上印的是
+    `--project &lt;本项目文件&gt;` 这个尖括号占位符 —— 对一个用界面的人来说，
+    那就等于没给下一步（AGENTS.md 地雷 35：程序做得到的事不许写成人要做的）。
+    判据按"名字对得上 + 落地目录对得上"两条一起认；只中一条就不认，
+    因为猜错的那条命令会把人带到**另一个项目**的仓库上去合入。
+    """
+    import json as _json
+
+    for p in _spec_files():
+        try:
+            data = _json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        if str(data.get("name") or "") == name and \
+                str(data.get("workspace") or "") == workspace:
+            return str(p)
+    return ""
+
+
 def batch_rows() -> List[Dict[str, Any]]:
     """批次状态（`runtime_batch/*.json`）→ 看板行。只读，不创建任何东西。
 
@@ -404,7 +449,7 @@ def batch_rows() -> List[Dict[str, Any]]:
         out.append({"name": str(data.get("name") or p.stem),
                     "workspace": str(data.get("workspace") or ""),
                     "owner_goal": str(data.get("owner_goal") or ""),
-                    "file": p.name, "milestones": mses,
+                    "file": p.name, "path": str(p), "milestones": mses,
                     # 中途改过的方向：状态文件里那份就是这一批生效的那几份
                     "directives": [d for d in (data.get("directives") or [])
                                    if isinstance(d, dict)],
@@ -429,17 +474,29 @@ def batch_section() -> List[str]:
         return out
     for b in rows:
         waiting = [m for m in b["milestones"] if m["status"] == "awaiting-merge"]
-        # name 是验收 agent 写的（实测它写过 "showcase-site — batch"），文件名
-        # 是框架定的。两个批次并排时只有后者能区分哪一份该合 —— 归档掉的那份
-        # 也照样是 awaiting-merge，看着一样在等你授权。
+        # 项目档路径：`--project` 要的是它，而这一格读的是状态文件。
+        # 认不出来就在命令位上照实说，不印一个猜出来的路径。
+        spec = _spec_for_batch(b["name"], b["workspace"])
+        proj = spec if spec else "&lt;没找到这一批的项目档 → 见下&gt;"
         out.append(f"<div class='card'><b>{html.escape(b['name'])}</b>"
                    f"<span class='sub'>   状态文件="
                    f"{html.escape(b['file'])}"
-                   f"   workspace="
+                   + (f"   项目档=<span class='mono'>{html.escape(spec)}</span>"
+                      if spec else "")
+                   + f"   workspace="
                    f"{html.escape(b['workspace'][:70]) or '（未记录）'}"
                    f"   批次总验收={html.escape(b['final'] or '未跑')}"
                    + (f"   批次判定=<b>{html.escape(b['verdict'])}</b>"
                       if b["verdict"] else "") + "</span>")
+        if not spec:
+            out.append(
+                "<div class='note bad'>这一批的项目档没认出来（按 name + workspace "
+                "在 <span class='mono'>runtime_batch/</span> 与 "
+                "<span class='mono'>runtime_batch/planned/</span> 里找过）。"
+                "下面三条命令里的 <span class='mono'>--project</span> 都要它 —— "
+                "我不替你猜一个路径：猜错的那条会去动**别的项目**的仓库。"
+                f"状态文件本身在 <span class='mono'>{html.escape(b['path'])}</span>，"
+                "对着它找到项目档再抄。</div>")
         if b.get("owner_goal"):
             # 拆出来的清单会丢限定词（实测：目标里"中文"消失了，页面全英文
             # 还全绿）。核查这一格必须同时看得见原话和拆出来那句。
@@ -456,12 +513,25 @@ def batch_section() -> List[str]:
             if m["demo_exit"]:
                 demo += f" exit={m['demo_exit']}"
             if m["status"] == "awaiting-merge":
-                nxt = ("<span class='bad'>等你授权合入</span> "
-                       "<span class='mono'>batch_project.py accept "
-                       "--project &lt;本项目文件&gt; --yes</span>")
+                # 命令里带的是这一批**真的**项目档路径（认不出来时上面已经明说了）。
+                # 以前这里印 `--project <本项目文件>` 一个占位符，等于把最后一步
+                # 还给人自己拼 —— 地雷 35 数出来的那类墙之一。
+                nxt = ("<span class='bad'>等你授权合入</span><br>"
+                       "<span class='mono'>python tools\\batch_project.py accept "
+                       "--project " + html.escape(proj) + " --yes</span>"
+                       "<div class='sub'>这一条会动你的仓库：补丁 "
+                       "<span class='mono'>git apply</span> → 只暂存补丁自己列出的那些路径 "
+                       "→ 一次 commit（消息里带 "
+                       + html.escape(m['id']) + " 与补丁哈希）。"
+                       "合入前会核对补丁哈希还是不是刚才那一份 —— 哈希漂了就拒。</div>")
             elif m["status"] == "failed":
-                nxt = ("<span class='mono'>run --retry "
-                       f"{html.escape(m['id'])}</span>")
+                nxt = ("<span class='bad'>停在失败格</span> —— 无人值守不跳过它<br>"
+                       "<span class='mono'>python tools\\batch_project.py run --retry "
+                       f"{html.escape(m['id'])} --project {html.escape(proj)}</span>"
+                       "<div class='sub'>重试 = 这一格从头再跑一次，"
+                       "会再起一轮真实 agent 调用（<b>花额度</b>）；旧的记录与证据留在 "
+                       "history 里不覆写。方向要改，先用下面那句『改这一批的方向』。"
+                       "</div>")
             elif m["status"] == "done":
                 nxt = "已合入"
                 if m["commit"]:
@@ -534,7 +604,11 @@ def batch_section() -> List[str]:
             out.append(
                 "<div class='notice'>这一格停在 <b>awaiting-merge</b>："
                 "执行与验收都已完成，合入是授权动作，只由人做那一条命令 —— "
-                "面板不提供合入按钮，这是设计不是没做完。</div>")
+                "面板不提供合入按钮，这是设计不是没做完。<br>"
+                "点头之前这一格能查的三样：<b>补丁行数与哈希</b>（框架采的）、"
+                "<b>demo 实际说了什么</b>（退出码只证明它没失败）、"
+                "<b>交给执行者的那段话</b>（展开就是逐字原文）。"
+                "整批的结论写在 <span class='mono'>runtime_batch/&lt;项目&gt;/DELIVERY.md</span>。</div>")
         out.append("</div>")
     return out
 
@@ -802,12 +876,28 @@ def planned_section(limit: int = 3) -> List[str]:
             "不合格就停下写明原因，中间不问你。项目档里写 "
             "<span class='mono'>\"mode\": \"human\"</span> 才回到"
             "跑一格等一次点头的老形状。"
-            "命令行等价：<span class='mono'>batch_project.py ship --project "
-            + html.escape(p.name) + "</span></span></form></div>")
+            "命令行等价（整批推进）：<span class='mono'>python tools\\batch_project.py"
+            " ship --project " + html.escape(str(p)) + "</span>"
+            "；只想推一格：<span class='mono'>python tools\\batch_project.py"
+            " run --project " + html.escape(str(p)) + "</span></span></form></div>")
     return out
 
 
 PENDING_STATUSES = ("QUEUED", "READY", "RETRY_WAIT", "PAUSED", "BLOCKED")
+
+
+def _runner_is_up(ctx) -> bool:
+    """"调度器此刻到底在不在"—— 判据是子进程活没活，不是页面上写过什么。
+
+    AGENTS.md 地雷 30 的同一条坑，在它自己的另一格上复发了：这里以前写
+    `getattr(ctx.runner, "running", False)`，而 `SchedulerRunner.running` 是**方法**
+    不是属性 —— 拿到的是 bound method、恒真，于是调度器根本没起来时，
+    任务页那一格照样说"调度器在跑但队列是空的"。测试替身把 running 存成布尔属性
+    （tests/test_workbench_status.py），所以矩阵全绿 —— 判据不在"页面说的状态"，
+    在"子进程真起来了没有"。调用点一律 `running()`，替身也改成方法。
+    """
+    runner = getattr(ctx, "runner", None)
+    return bool(runner is not None and runner.running())
 
 
 def agent_activity_line(ctx, rows: List[dict]) -> str:
@@ -819,7 +909,7 @@ def agent_activity_line(ctx, rows: List[dict]) -> str:
     """
     import html
 
-    running = bool(getattr(ctx.runner, "running", False))
+    running = _runner_is_up(ctx)
     active = [r for r in rows if str(r.get("status")) == "RUNNING"]
     pending = [r for r in rows if str(r.get("status")) in PENDING_STATUSES]
     if active:
@@ -1127,6 +1217,94 @@ def scope_note(config_dir: str) -> str:
             "</span> · <a href='/classic'>纯文本版</a></div>")
 
 
+def _stop_reason(row: Dict[str, Any], config_dir: str) -> str:
+    """这一格现在**为什么**停在这儿 —— 只转述采集到的字段，不在这里重算判据。
+
+    状态那一颗药丸只回答"状态字是什么"，而人看队列时问的是
+    "它卡住了吗 / 卡在哪 / 证据在哪"。所以这一列把已有的三样采集结果并成一句：
+    `stage`（进行到哪）、`last_error`（为什么）、`patch_lines`+`strategy`
+    （有没有可交接物），并直接给出证据那一页的链接。
+
+    "这条 last_error 到底算不算一次失败"不在这里判 —— 那是
+    `delivery_view._is_live_failure` 那一份判据（COMPLETED 上的 last_error
+    通常是续跑历史，不是错误）。同一个判断在两个地方各写一遍就是本项目的缺陷形状。
+    """
+    import html
+
+    rt = html.escape(str(row.get("runtime_task_id") or ""))
+    cfg = html.escape(config_dir)
+    status = str(row.get("status") or "")
+    err = str(row.get("last_error") or "")
+    evidence = (f"<a href='/run/{rt}?config={cfg}'>证据 →</a>　"
+                f"<a href='/ui/flow/{rt}'>两个 agent</a>")
+    if status == "RUNNING":
+        return ("<span class='ok'>在跑</span> <span class='sub'>当前阶段 "
+                f"<span class='mono'>{html.escape(str(row.get('stage') or '还没提交阶段'))}"
+                "</span>（进行中的模型调用不会被打断）</span>")
+    if dv._is_live_failure(row):
+        return (f"<span class='bad'>停在 {html.escape(status)}</span> "
+                f"<span class='sub'>{html.escape(err[:140]) or '（库里没写下原因）'}"
+                "</span><br>" + evidence)
+    if status == "PAUSED":
+        return ("<span class='warn'>按下过暂停</span> <span class='sub'>协作式的："
+                "走到下一个轮次边界才停，点『继续』才复跑</span>")
+    if status in ("QUEUED", "READY", "RETRY_WAIT"):
+        return ("<span class='sub'>在排队 —— 要调度器领走才开始动。"
+                "没起来是因为还没点『启动调度器』，还是容量闸门挡着？"
+                "看本页上面那一行实话。</span>")
+    if status == "COMPLETED":
+        # 已完成却没有可交接物：这一格最容易被"绿色"骗过去（地雷 22 那一族）。
+        if not int(row.get("patch_lines") or 0) and \
+                str(row.get("strategy") or "") == "GIT_WORKTREE":
+            return ("<span class='bad'>评审判过了，但框架没采到补丁</span> "
+                    "<span class='sub'>没有可交接物 —— 补取证：把这一格的工作区"
+                    "重新比一遍，只新增不覆写。命令行："
+                    "<span class='mono'>python tools\\batch_project.py recheck "
+                    "--project &lt;项目档&gt;</span></span><br>" + evidence)
+        return ("<span class='ok'>跑完了</span> <span class='sub'>补丁 "
+                f"{row.get('patch_lines') or 0} 行 · 阶段 "
+                f"{html.escape(str(row.get('stage') or '-'))}</span><br>" + evidence)
+    if err:
+        return f"<span class='sub'>{html.escape(err[:140])}</span><br>" + evidence
+    return f"<span class='sub'>阶段 <span class='mono'>{html.escape(str(row.get('stage') or '-'))}</span></span>"
+
+
+def _row_actions(row: Dict[str, Any], config_dir: str) -> str:
+    """这一行的队列动作 —— 全部打在**已有的** `/control` 与 `/steer` 两扇门上。
+
+    判据不在这层（pause/resume/cancel 的允许状态是 `TaskRepository` 说的，
+    补一句话的生效点是 `queue steer` 那套），这里只把人能按的那三下摆到看得见的位置，
+    并把后果写清楚：协作式的动作落在轮次边界，进行中的模型调用不会被打断，
+    <b>已经花掉的额度不会回来</b>。
+    """
+    import html
+
+    rt = html.escape(str(row.get("runtime_task_id") or ""))
+    cfg = html.escape(config_dir, quote=True)
+    status = str(row.get("status") or "")
+    if status in dv.TERMINAL:
+        return ("<span class='sub'>这一条已收口。要按新方向重做，是"
+                "<b>重新入队</b>（会再起一轮真实调用）：<br>"
+                "<span class='mono'>python main.py queue retry " + rt
+                + " --config-dir " + cfg + "</span></span>")
+    bits = []
+    for action, label, cls, note in (
+            ("pause", "暂停", "", "走到安全边界才停"),
+            ("resume", "继续", "", "只认 PAUSED"),
+            ("cancel", "停止这一格", "danger", "协作式，不强杀")):
+        bits.append(
+            "<form method='post' action='/control' style='display:inline'>"
+            f"<input type='hidden' name='runtime_task_id' value=\"{rt}\">"
+            f"<input type='hidden' name='config' value=\"{cfg}\">"
+            f"<button type='submit' name='action' value='{action}'"
+            f"{' class=\"danger\"' if cls else ''} title='{note}'>{label}</button>"
+            "</form>")
+    steer = ("<a href='/ui/flow/" + rt + "'>给这一格补一句</a>")
+    return ("<div class='rowbtns'>" + "".join(bits) + "</div>"
+            f"<div class='sub'>{steer}　暂停/停止都在下一个轮次边界生效；"
+            "进行中的模型调用不会被打断，已花的额度不回来。</div>")
+
+
 def tasks(ctx, notice: str = "", bad: bool = False) -> str:
     import html
 
@@ -1173,10 +1351,12 @@ def tasks(ctx, notice: str = "", bad: bool = False) -> str:
             agent_activity_line(ctx, rows),
             "<h2>这个 config 的队列</h2><div class='card'><table>"
             "<tr><th>运行</th><th>需求</th><th>状态</th>"
-            "<th>最新阶段</th><th>调用</th><th>补丁</th><th>工作区</th>"
-            "<th>提交</th><th>工作流</th></tr>"]
+            "<th>为什么停在这儿 · 证据</th><th>调用</th><th>补丁</th><th>工作区</th>"
+            "<th>提交</th><th>队列动作</th></tr>"]
     if not rows:
-        body.append("<tr><td colspan='9' class='sub'>队列里还没有运行。"
+        body.append("<tr><td colspan='9' class='sub'>队列里还没有运行 —— "
+                    "这是真的空，不是没读到。上面那一格写一句话就能开出第一条；"
+                    "确认自己没有停在另一台配置上（页底那行写的是当前队列库）。"
                     "</td></tr>")
     for r in rows:
         rt = str(r.get("runtime_task_id"))
@@ -1192,13 +1372,12 @@ def tasks(ctx, notice: str = "", bad: bool = False) -> str:
             f"?config={html.escape(ctx.config_dir)}'>{html.escape(rt)}</a></td>"
             f"<td>{goal_cell}</td>"
             f"<td>{_pill(r.get('status'))}</td>"
-            f"<td class='mono'>{html.escape(str(r.get('stage') or '-'))}</td>"
+            f"<td>{_stop_reason(r, ctx.config_dir)}</td>"
             f"<td class='sub'>{html.escape(calls)}</td>"
             f"<td>{html.escape(dv._patch_cell(r).strip())}</td>"
             f"<td class='sub'>{html.escape(ws[:60])}</td>"
             f"<td class='sub'>{html.escape(str(r.get('submitted_at'))[:19])}"
-            f"</td><td><a href='/ui/flow/{html.escape(rt)}'>两个 agent</a>"
-            f"</td></tr>")
+            f"</td><td>{_row_actions(r, ctx.config_dir)}</td></tr>")
     body.append("</table></div>")
     body += batch_section()
     body += planned_section()

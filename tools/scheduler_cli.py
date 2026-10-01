@@ -70,7 +70,7 @@ def build_scheduler_from_config(config, repo: TaskRepository, *,
     共享 Runtime 资源（单 BGE worker）+ GLOBAL/PROVIDER 容量闸门。
 
     config_dir 决定任务未绑定 config_profile 时 worker 用哪套配置。它必须
-    跟随实际加载的目录：写死 config_p8 会让 `--config-dir config_p10` 提交
+    跟随实际加载的目录：写死 archive/config-history/config_p8 会让 `--config-dir archive/config-history/config_p10` 提交
     的任务在 resume 时装载一份 **checkpoint 未启用** 的配置（Phase 10 实测）。
     crash_hook 只由测试/Demo 显式注入（§95），production 恒为 None。
     """
@@ -387,7 +387,27 @@ def _submit(args, config, config_dir: str = "config") -> int:
         repo.close()
 
 
-def _list(args, config) -> int:
+#: 空队列有两种成因，都必须当场说出口：这条队列真的空，
+#: 或者人带的 --config-dir 与提交时不是同一台（任务"消失"在另一个库里）。
+_EMPTY_QUEUE_HINT = (
+    "  → 这一台配置下没有运行。任务是在别的 config 里提交的就不会出现在这里："
+    "翻一翻 `python main.py queue list --config-dir <别的配置目录>`，"
+    "或一次看全 `python tools\\delivery_view.py --board --all-configs`。")
+
+
+def _list(args, config, config_dir: str = "config") -> int:
+    # 先问库在不在，再决定连不连 —— TaskRepository 一连就把空库建出来，
+    # 于是"这条队列从没跑过"与"跑过但现在是空的"在磁盘上长得一模一样。
+    # 工作台那条边界早有同一条判据（tests/test_workbench_ui.py：缺库不许被创建），
+    # CLI 这一侧以前没有。
+    banner = queue_banner(config_dir, config.settings.scheduler.db_path)
+    print(banner)
+    if not Path(config.settings.scheduler.db_path).is_file():
+        print(f"{'RUNTIME TASK':<22} {'STATUS':<10} {'PRI':>4} {'ATT':>4}"
+              f"  {'SUBMITTED':<20} {'TASK':<20} LAST ERROR")
+        print("\n共 0 条")
+        print(_EMPTY_QUEUE_HINT)
+        return 0
     repo = build_repo_from_config(config)
     try:
         tasks = repo.list(limit=200)
@@ -405,6 +425,13 @@ def _list(args, config) -> int:
                   f"{rt.priority:>4} {rt.attempt:>4}  {rt.submitted_at[:20]:<20}"
                   f" {rt.task_id:<20} {err}")
         print(f"\n共 {len(tasks)} 条")
+        if not tasks:
+            # 空队列有两种成因，都必须当场说出口：这条队列真的空，
+            # 或者人带的 --config-dir 与提交时不是同一台（任务"消失"）。
+            print("  → 这一台配置下没有运行。任务是在别的 config 里提交的"
+                  "就不会出现在这里：翻一翻 "
+                  "`python main.py queue list --config-dir <别的配置目录>`，"
+                  "或一次看全 `python tools\\delivery_view.py --board --all-configs`。")
         return 0
     finally:
         repo.close()
@@ -418,6 +445,22 @@ def _missing_task(runtime_task_id: str, repo) -> str:
     """
     return (f"[queue] 未找到 {runtime_task_id}（队列库 {repo.db_path}）；"
             f"这个任务可能是在别的 config 下提交的 —— 带 --config-dir 指过去")
+
+
+def queue_banner(config_dir: str, db_path) -> str:
+    """每次读队列，第一行就说清"读的是哪一台配置的哪个库"。
+
+    AGENTS.md 起手那一节明写的坑：`--config-dir` 不带一致 = 在查另一个队列，
+    任务看起来"消失了"。原来这句话只在"按 rt-id 找不到"时才说（`_missing_task`），
+    而 `queue list` 查到空队列时**什么都不说** —— 人拿到的是"共 0 条"，
+    不是"你查的是另一个库，这个库在这台机器上还没建过"。判据要能自己被读出来。
+
+    db 还不存在也要说出来：TaskRepository 一连就会把空库建出来，
+    于是"从没跑过"与"跑过但被别的 config 看着"在输出里长得一模一样。
+    """
+    db = Path(db_path)
+    state = "" if db.is_file() else "（这个库还不存在 —— 这台配置还没跑过任务）"
+    return f"[queue] config={config_dir}  队列库={db}{state}"
 
 
 def _show(args, config) -> int:
@@ -820,7 +863,7 @@ def run_queue_cli(argv: list[str], config_dir: str) -> int:
     if args.action == "submit":
         return _submit(args, config, config_dir)
     if args.action == "list":
-        return _list(args, config)
+        return _list(args, config, config_dir)
     if args.action == "show":
         return _show(args, config)
     if args.action == "trace":

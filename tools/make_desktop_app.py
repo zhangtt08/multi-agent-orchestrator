@@ -406,6 +406,28 @@ def readme(ref: str, sha: str, version: str, dest: Path, n_files: int,
 """
 
 
+def _ascii_safe_pydir(exe: Path) -> str:
+    """start-mao*.bat 必须纯 ASCII：含中文的路径会被 cmd 按 GBK 解成别的命令（外壳写死这条）。
+
+    仓库被搬进含中文的目录（`Desktop/项目/`）之后，就地重建的 `.venv` 路径也带中文，
+    于是打包直接失败 —— 这是环境事实，不是构建物的缺陷。按"限制留在判据上、前提由程序满足"
+    的规矩，先换用同机上另一个 ASCII 路径的解释器，而不是把活推回给人去改目录。
+    """
+    pydir = str(exe.parent)
+    if pydir.isascii():
+        return pydir
+    home = Path.home()
+    candidates = (home / "mao-venv" / "Scripts",
+                  Path(os.environ.get("LOCALAPPDATA", str(home))) / "mao-venv" / "Scripts")
+    for cand in candidates:
+        if (cand / "python.exe").is_file() and str(cand).isascii():
+            return str(cand)
+    raise BuildError(
+        f"解释器目录含非 ASCII（{pydir}），生成的 .bat 会被 cmd 按 GBK 解码。"
+        f"要么把仓库放在纯 ASCII 路径下，要么带 --python 指一个 ASCII 路径且装好 "
+        f"pydantic+PyYAML 的解释器（本机约定位置：{candidates[0]}）。")
+
+
 def build(ref: Optional[str] = None, dest: Optional[Path] = None,
           replace: bool = False, shortcuts: bool = False, install: bool = False,
           desktop_file: bool = False,
@@ -415,7 +437,9 @@ def build(ref: Optional[str] = None, dest: Optional[Path] = None,
     repo = Path(root)
     ref_name, sha = resolve_ref(repo, ref)
     exe = Path(python_exe or sys.executable)
-    pydir = str(exe.parent)
+    # 显式点名也要守住这条：非 ASCII 的 --python 只会产出一个双击就坏的外壳。
+    pydir = _ascii_safe_pydir(exe)
+    exe = Path(pydir) / ("pythonw.exe" if (Path(pydir) / "pythonw.exe").is_file() else "python.exe")
     pyw = pydir + "\\pythonw.exe"
     if not Path(pyw).is_file():
         pyw = str(exe)

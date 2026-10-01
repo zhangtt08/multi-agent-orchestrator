@@ -50,48 +50,48 @@ export MEMORY_EMBEDDING_INTERPRETER=<ml venv 的 python.exe>
 export MEMORY_HF_HOME=<HF 缓存目录>
 
 # 2) 体检（不执行任务）
-python main.py doctor --config-dir config_p9
+python main.py doctor --config-dir archive/config-history/config_p9
 
 # 3) 提交任务（队列持久化；submit != 立即运行）
-python main.py queue submit --config-dir config_p9 \
+python main.py queue submit --config-dir archive/config-history/config_p9 \
     --goal "修复 xxx" --workspace <项目目录> [--strategy GIT_WORKTREE] [--priority HIGH]
 
 # 4) 启动调度（并发执行队列任务，队列空自动退出）
-python main.py scheduler run --config-dir config_p9          # 常驻
-python main.py scheduler run --config-dir config_p9 --once   # 单 tick
+python main.py scheduler run --config-dir archive/config-history/config_p9          # 常驻
+python main.py scheduler run --config-dir archive/config-history/config_p9 --once   # 单 tick
 
 # 5) 观测
-python main.py queue list --config-dir config_p9
-python main.py queue show <rt_id> --config-dir config_p9
-python main.py queue trace <rt_id> --config-dir config_p9    # 调度事件 + 运行史
-python main.py queue pause|resume|cancel|retry <rt_id> --config-dir config_p9
-python main.py scheduler status --config-dir config_p9       # 指标 + 并发峰值
-python main.py scheduler timeline --config-dir config_p9     # 时间线 + overlap/容量统计
-python main.py scheduler recover --config-dir config_p9      # 恢复 stale RUNNING
+python main.py queue list --config-dir archive/config-history/config_p9
+python main.py queue show <rt_id> --config-dir archive/config-history/config_p9
+python main.py queue trace <rt_id> --config-dir archive/config-history/config_p9    # 调度事件 + 运行史
+python main.py queue pause|resume|cancel|retry <rt_id> --config-dir archive/config-history/config_p9
+python main.py scheduler status --config-dir archive/config-history/config_p9       # 指标 + 并发峰值
+python main.py scheduler timeline --config-dir archive/config-history/config_p9     # 时间线 + overlap/容量统计
+python main.py scheduler recover --config-dir archive/config-history/config_p9      # 恢复 stale RUNNING
 
 # 5b) 断点续跑（Phase 10：stage-level durable checkpoint，需 checkpoint.enabled=true）
-python main.py checkpoint list <task_id> --config-dir config_p10          # 链与状态
-python main.py checkpoint verify <task_id> --config-dir config_p10        # hash + 链完整性
-python main.py checkpoint resume-point <task_id> --config-dir config_p10  # 下一个阶段是什么
-python main.py queue resume <rt_id> --config-dir config_p10   # 同 attempt 续跑（retry 才是新 attempt）
-python main.py scheduler recover --config-dir config_p10      # stale → 优先从 checkpoint 续跑
+python main.py checkpoint list <task_id> --config-dir archive/config-history/config_p10          # 链与状态
+python main.py checkpoint verify <task_id> --config-dir archive/config-history/config_p10        # hash + 链完整性
+python main.py checkpoint resume-point <task_id> --config-dir archive/config-history/config_p10  # 下一个阶段是什么
+python main.py queue resume <rt_id> --config-dir archive/config-history/config_p10   # 同 attempt 续跑（retry 才是新 attempt）
+python main.py scheduler recover --config-dir archive/config-history/config_p10      # stale → 优先从 checkpoint 续跑
 # 进程被杀后不需要手工干预：下一次 tick 会自动从最近的"已提交 stage"继续，
 # 已完成的 Planning / Execution / 框架验证都不会重跑。
 
 # 6) 真实并发 Demo（一条命令全链路，含验收与证据落盘）
-python tools/phase9_concurrent_demo.py --config-dir config_p9
+python tools/phase9_concurrent_demo.py --config-dir archive/config-history/config_p9
 python tools/phase9_concurrent_demo.py --cleanup             # 清理已安全的 worktree
 
 # 6b) 断点续跑 Demo（一条命令，两个真实 Python 进程：崩溃 → 换进程续跑到完成）
 python tools/phase10_checkpoint_demo.py                      # 离线 Mock，零配额、可复现
-python tools/phase10_checkpoint_demo.py --config-dir config_p10   # 真实 Harness 版
+python tools/phase10_checkpoint_demo.py --config-dir archive/config-history/config_p10   # 真实 Harness 版
 
 # 7) Memory 审计
 python main.py memory list | search "..." | index status | trace <task_id>
 ```
 
-说明：`config_p9` = 并发模式（max_concurrent_tasks=2，GIT_WORKTREE，容量闸门）；
-`config_p8` = 串行队列；`scheduler.enabled=false` 的旧 config = Phase 1-7 单任务 API。
+说明：`archive/config-history/config_p9` = 并发模式（max_concurrent_tasks=2，GIT_WORKTREE，容量闸门）；
+`archive/config-history/config_p8` = 串行队列；`scheduler.enabled=false` 的旧 config = Phase 1-7 单任务 API。
 worktree 默认保留便于审计，`--cleanup` 只清理终态且 patch 已存的任务。
 
 ---
@@ -285,7 +285,7 @@ multi-agent-orchestrator/
 │   ├── harness.yaml
 │   └── settings.yaml
 │
-├── config_p2/                    # ② 第二阶段配置（真实 subprocess Demo）
+├── archive/config-history/config_p2/                    # ② 第二阶段配置（真实 subprocess Demo）
 │   ├── agents.yaml               # 三角色全部指向 GenericCLIAdapter + 假 CLI
 │   ├── harness.yaml              # base_cli + 5 个叶子 Profile（stdin/argument/file）
 │   └── settings.yaml             # dry_run=false + preflight + 修复次数 + 脱敏键
@@ -338,7 +338,7 @@ multi-agent-orchestrator/
 │   ├── test_p3_rework_session.py # §十五/§十六 返工设计 / Session 诚实性
 │   └── test_p3_real_harness.py   # §五/§六 真实 CLI（默认排除，-m real_harness）
 │
-├── config_p3/                    # ③ 第三阶段配置：真实 Executor + Mock 其余角色
+├── archive/config-history/config_p3/                    # ③ 第三阶段配置：真实 Executor + Mock 其余角色
 │
 ├── tools/
 │   ├── baseline_count.py         # 逐文件权威测试计数
@@ -575,7 +575,7 @@ python main.py --executor mock_executor_b               # 验证换 Adapter 不�
 ### 7.2 第二阶段 Demo（真实 subprocess 调用假 CLI）
 
 ```bash
-python main.py --config-dir config_p2
+python main.py --config-dir archive/config-history/config_p2
 ```
 
 三角色全部换成 `GenericCLIAdapter + subprocess`，每次调用都是**真实子进程**，
@@ -597,8 +597,8 @@ python main.py --config-dir config_p2
 另外两个**不执行任务**的检查命令：
 
 ```bash
-python main.py --providers --config-dir config_p2   # 每个角色会被怎么调用
-python main.py --doctor    --config-dir config_p2   # 环境体检（8 项，失败返回非 0）
+python main.py --providers --config-dir archive/config-history/config_p2   # 每个角色会被怎么调用
+python main.py --doctor    --config-dir archive/config-history/config_p2   # 环境体检（8 项，失败返回非 0）
 ```
 
 `--providers` 会逐字打印 `command` / `extra_args` / `prompt_mode` / `cwd_mode` /
@@ -801,7 +801,7 @@ python main.py --discover --command /path/to/any-cli   # 探测任意可执行�
 2. **`config/agents.yaml`** —— 把角色的 `harness_profile` 指向那个 Profile 名。
 
 就这样。`GenericCLIAdapter` 已经能覆盖绝大多数 CLI 型 Harness。
-第三阶段的真实 Executor **只做了这两件事**，见 `config_p3/`。
+第三阶段的真实 Executor **只做了这两件事**，见 `archive/config-history/config_p3/`。
 
 ### 11.1.1 第三阶段的真实 Profile（可复制模板）
 
@@ -1011,7 +1011,7 @@ git_diff · changed_files
 Reviewer 据此判断，而不是采信 Executor 的自述 —— 这条由
 
 ```bash
-python main.py --config-dir config_p2
+python main.py --config-dir archive/config-history/config_p2
 ```
 
 的 `framework verification: [PASS] selfcheck: exit=0` 一行直接体现：
@@ -1174,7 +1174,7 @@ Preflight          —— 差集非空 → BLOCKED，并给出具体的 CheckIte
 缺能力时**不降级运行**。理由：一个不支持 `file_write` 的 Executor
 跑出来的"成功"是假的，让它跑比让它停更危险。
 
-`python main.py --doctor --config-dir config_p2` 会打 8 项体检，
+`python main.py --doctor --config-dir archive/config-history/config_p2` 会打 8 项体检，
 任何一项 FAIL 都返回非 0 退出码。
 
 ### 13.7 假 CLI 为什么必须是真的独立进程
@@ -1200,9 +1200,9 @@ def test_fake_cli_is_never_imported_into_the_test_process():
 ### 13.8 第二阶段的命令
 
 ```bash
-python main.py --providers --config-dir config_p2   # 每个角色会被怎么调用（不执行）
-python main.py --doctor    --config-dir config_p2   # 环境体检（不执行）
-python main.py             --config-dir config_p2   # 完整闭环
+python main.py --providers --config-dir archive/config-history/config_p2   # 每个角色会被怎么调用（不执行）
+python main.py --doctor    --config-dir archive/config-history/config_p2   # 环境体检（不执行）
+python main.py             --config-dir archive/config-history/config_p2   # 完整闭环
 ```
 
 ---

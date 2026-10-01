@@ -15,6 +15,10 @@ __pycache__/
 *.local.env
 config*/local.yaml
 config*/local.env
+# 阶段性历史档自 2026-10-02 起在 archive/config-history/ 下 —— 含斜杠的规则是
+# 根锚定的，搬家会让上面两条失效，所以同一判据在新位置各写一遍（不是放宽匹配）。
+archive/config-history/config*/local.yaml
+archive/config-history/config*/local.env
 .env
 .env.local
 

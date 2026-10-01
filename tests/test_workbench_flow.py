@@ -473,7 +473,7 @@ class TestHttpRoutes:
         rt, _ = make_run(cfg, status="RUNNING")
         code, _body, url = self._post(
             server + "/steer",
-            f"runtime_task_id={rt.runtime_task_id}&config=config_p9&text=换台配置",
+            f"runtime_task_id={rt.runtime_task_id}&config=archive/config-history/config_p9&text=换台配置",
             origin=server)
         assert code == 200 and "bad=1" in url
         repo = _repo(cfg)

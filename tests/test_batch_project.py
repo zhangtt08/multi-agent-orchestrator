@@ -1350,7 +1350,7 @@ class TestPlan:
         把它拒掉 —— 这条测试锁两件事：mock 绑定真的生效（没有子进程），
         以及"链路通"不等于"产物能用"。
         """
-        offline = str(bp.ROOT / "config_offline")
+        offline = str(bp.ROOT / "archive/config-history/config_offline")
         text = bp.ask_supervisor("plan a project", goal="g", workspace=str(repo),
                                  config_dir=offline, mock=True)
         assert json.loads(text)["executor_prompt"], "Mock Supervisor 没应答"

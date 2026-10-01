@@ -37,7 +37,7 @@ def workspace_dir() -> Path:
 
 
 def ensure(root: Path | str = ".", base: str =
-           "config_p10_offline/settings.yaml",
+           "archive/config-history/config_p10_offline/settings.yaml",
            workspace: str | Path | None = None) -> dict:
     """把演练档写出来。返回 {"config_dir", "workspace"}；workspace 是绝对路径。
 

@@ -263,7 +263,7 @@ class TestRepairStrategy:
     def test_default_is_supervisor_replan(self):
         from mao.core import load_config
 
-        config = load_config(str(PROJECT_ROOT / "config_p5"))
+        config = load_config(str(PROJECT_ROOT / "archive/config-history/config_p5"))
         assert config.settings.repair_strategy == "supervisor_replan"
 
     def test_direct_strategy_builds_plan_from_next_prompt(self, monkeypatch):

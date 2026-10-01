@@ -59,7 +59,7 @@ def build_config() -> str:
     """一份自己的配置：队列库、运行目录、worktree 全在这次专用路径下。"""
     wipe(CFG)
     CFG.mkdir(parents=True)
-    src = (ROOT / "config_p10_offline" / "settings.yaml").read_text(
+    src = (ROOT / "archive/config-history/config_p10_offline" / "settings.yaml").read_text(
         encoding="utf-8")
     out = []
 

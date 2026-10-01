@@ -453,7 +453,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--resume", action="store_true", help="恢复最近一次未完成任务")
     parser.add_argument("--executor", default=None, help="覆盖 executor provider（验证可替换性）")
     parser.add_argument("--config-dir", default=None,
-                        help="配置目录（默认 config/；离线档 config_offline/，"
+                        help="配置目录（默认 config/；离线档 archive/config-history/config_offline/，"
                              "零配额示例 examples/config_minimal/）")
     parser.add_argument("--providers", action="store_true",
                         help="打印每个角色实际会怎么被调用（不执行任务）")
@@ -480,6 +480,44 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _available_config_dirs() -> list[str]:
+    """仓库里现在有哪些配置目录（判据与看板同源：有 settings.yaml + agents.yaml 才算）。
+
+    只为一句报错服务：--config-dir 打错时，光说"读不出来"不够，
+    得把可抄的那几个名字当场摆出来。
+    """
+    from tools.delivery_view import enumerate_config_dirs
+
+    try:
+        return enumerate_config_dirs()
+    except Exception:  # noqa: BLE001 —— 这是附加信息，不许左右结论
+        return []
+
+
+def _run_subcommand(runner, sub_argv: list[str], config_dir: str) -> int:
+    """跑 queue / scheduler / checkpoint 子命令，把"配置目录读不出来"折成一句人话。
+
+    原来 `--config-dir config8`（打错一个字母）得到的是一段 traceback 加退出码 1，
+    而它与 AGENTS.md 明写的那个坑是同一面镜子：人不知道自己在查哪一台队列。
+    目录不存在 = 用法错误，退出码按产品口径给 2（见 README「Exit codes」）。
+    """
+    from mao.core.exceptions import ConfigurationError
+
+    try:
+        return runner(sub_argv, config_dir=config_dir)
+    except ConfigurationError as exc:
+        print(f"config error: --config-dir {config_dir} 读不出来 —— {exc}",
+              file=sys.stderr)
+        names = _available_config_dirs()
+        if names:
+            print("  这台仓库里可用的配置目录：", file=sys.stderr)
+            for name in names:
+                print(f"    {name}", file=sys.stderr)
+        print("  每个配置目录有自己的队列库：同一个会话里所有子命令"
+              "带同一个 --config-dir，否则就是在查另一条队列。", file=sys.stderr)
+        return 2
+
+
 def main(argv: list[str] | None = None) -> int:
     # ---- 阶段六：memory 子命令（§32/§33 审计 CLI）----
     # python main.py memory list | show <id> | search "..." | invalidate <id> | trace <task_id> | compact
@@ -503,7 +541,7 @@ def main(argv: list[str] | None = None) -> int:
     if argv_list and argv_list[0] == "memory":
         from tools.memory_cli import run_memory_cli
 
-        # 默认跟随生产配置；以前钉在 config_p6，会让 memory 视图与
+        # 默认跟随生产配置；以前钉在阶段性历史档 config_p6，会让 memory 视图与
         # queue/checkpoint 视图指向不同的 runtime。
         config_dir = "config"
         if "--config-dir" in argv_list:
@@ -526,12 +564,13 @@ def main(argv: list[str] | None = None) -> int:
             if idx + 1 < len(sub_argv):
                 config_dir = sub_argv[idx + 1]
             sub_argv = sub_argv[:idx] + sub_argv[idx + 2:]
-        return run_checkpoint_cli(sub_argv, config_dir=config_dir)
+        return _run_subcommand(run_checkpoint_cli, sub_argv,
+                               config_dir=config_dir)
 
     if argv_list and argv_list[0] in ("queue", "scheduler"):
         from tools.scheduler_cli import run_queue_cli, run_scheduler_cli
 
-        # 以前默认 config_p8：那里 checkpoint 段根本没开，scheduler 看到的
+        # 以前默认阶段性历史档 config_p8：那里 checkpoint 段根本没开，scheduler 看到的
         # 是另一套 runtime 与另一个队列库。
         config_dir = "config"
         sub_argv = argv_list[1:]
@@ -541,7 +580,7 @@ def main(argv: list[str] | None = None) -> int:
                 config_dir = sub_argv[idx + 1]
             sub_argv = sub_argv[:idx] + sub_argv[idx + 2:]
         runner = run_queue_cli if argv_list[0] == "queue" else run_scheduler_cli
-        return runner(sub_argv, config_dir=config_dir)
+        return _run_subcommand(runner, sub_argv, config_dir=config_dir)
 
     args = build_parser().parse_args(argv_list)
 

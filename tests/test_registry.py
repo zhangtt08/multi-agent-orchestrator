@@ -245,7 +245,7 @@ class TestConfigLoading:
 
         monkeypatch.setenv("MAO_EXECUTOR_PROVIDER", "mock_executor_b")
         monkeypatch.setenv("MAO_MAX_ROUNDS", "3")
-        config = load_config("config_offline")
+        config = load_config("archive/config-history/config_offline")
         assert config.executor.provider == "mock_executor_b"
         assert config.settings.max_rounds == 3
 
@@ -255,7 +255,7 @@ class TestConfigLoading:
 
         monkeypatch.setenv("MAO_MAX_ROUNDS", "not-a-number")
         with pytest.raises(ConfigurationError):
-            load_config("config_offline")
+            load_config("archive/config-history/config_offline")
 
     def test_missing_config_file_is_reported(self, tmp_path):
         from mao.core.config import load_config

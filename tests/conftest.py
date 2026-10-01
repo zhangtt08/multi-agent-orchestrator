@@ -32,7 +32,7 @@ def make_config(**overrides: Any):
     """加载真实 config，再按需覆盖。"""
     from mao.core import load_config
 
-    config = load_config("config_offline")
+    config = load_config("archive/config-history/config_offline")
     if overrides:
         apply_overrides(config, overrides)
     return config

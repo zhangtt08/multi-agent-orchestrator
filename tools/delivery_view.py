@@ -781,9 +781,15 @@ def _settings_scalar(config_dir: str, dotted: str) -> str:
 
 
 def enumerate_config_dirs() -> List[str]:
-    """项目里所有"像配置目录"的东西（有 settings.yaml + agents.yaml 才算）。"""
+    """项目里所有"像配置目录"的东西（有 settings.yaml + agents.yaml 才算）。
+
+    第三段是 `archive/config-history/`：阶段性历史档 2026-10-02 从仓库根搬进了那里，
+    但它们各自的队列库还在（`queue_p10.db` 那一类）。看板少扫一层，
+    躺在历史队列里的任务就"消失"了 —— 正是 AGENTS.md 明写的那个坑的形状。
+    """
     found: List[str] = []
-    for pattern in ("*/settings.yaml", "examples/*/settings.yaml"):
+    for pattern in ("*/settings.yaml", "examples/*/settings.yaml",
+                    "archive/config-history/*/settings.yaml"):
         for path in sorted(ROOT.glob(pattern)):
             rel = path.parent.relative_to(ROOT).as_posix()   # 相对路径：看板要能抄进 --config-dir
             if (path.parent / "agents.yaml").is_file():
@@ -983,7 +989,7 @@ def snapshot(config_dir: str, rt: Dict[str, Any]) -> Dict[str, Any]:
 def board(config_dirs: List[str], limit: int = 8) -> List[Dict[str, Any]]:
     """跨配置列出最近的运行。
 
-    同一个队列库可能被几份配置共用（`config/` 与 `config_p8/` 都指 `queue.db`），
+    同一个队列库可能被几份配置共用（`config/` 与 `archive/config-history/config_p8/` 都指 `queue.db`），
     那时同一条任务会在两处都出现 —— 那不是两条运行。按 (库文件, rt-id) 去重，
     把共用它的配置名一起标出来，避免看板把一份数据读成两份进度。
     """
@@ -1237,7 +1243,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--board", action="store_true",
                         help="看板：列出最近的运行（跨配置用 --all-configs）")
     parser.add_argument("--all-configs", action="store_true", dest="all_configs",
-                        help="--board 扫所有 config*/ 与 examples/config*/ 的队列库")
+                        help="--board 扫所有 config*/、examples/config*/ 与 "
+                             "archive/config-history/config*/ 的队列库")
     parser.add_argument("--limit", type=int, default=8,
                         help="每个配置最多列几条（默认 8）")
     parser.add_argument("--refresh", type=int, default=0,

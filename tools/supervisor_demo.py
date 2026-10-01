@@ -102,7 +102,7 @@ DEMOS = {
         ],
         "max_rounds": 3,
     },
-    # §39：真实跨任务 Memory Demo（需 --config-dir config_p6）。
+    # §39：真实跨任务 Memory Demo（需 --config-dir archive/config-history/config_p6）。
     # Task A（三角色真闭环）→ 终态自动抽取 VERIFIED Memory（PROJECT scope）
     # Task B（同工作区重置后重新规划）→ 新的真实 Supervisor 检索 + 注入该经验，
     # trace 必须出现 memory_ids_used。不强制 Agent 复述 Memory 内容。
@@ -132,7 +132,7 @@ def _read_trace(runtime_dir: Path, task_id: str) -> list:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="阶段五 Real Supervisor Demo")
     parser.add_argument("--demo", choices=sorted(DEMOS), default="direct")
-    parser.add_argument("--config-dir", default="config_p5")
+    parser.add_argument("--config-dir", default="archive/config-history/config_p5")
     parser.add_argument("--runtime-dir", default="runtime_p5")
     args = parser.parse_args(argv)
 

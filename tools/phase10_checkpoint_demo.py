@@ -20,11 +20,11 @@
 
 用法：
     python tools/phase10_checkpoint_demo.py                       # 离线（Mock，零配额）
-    python tools/phase10_checkpoint_demo.py --config-dir config_p10   # 真实 Harness
+    python tools/phase10_checkpoint_demo.py --config-dir archive/config-history/config_p10   # 真实 Harness
     python tools/phase10_checkpoint_demo.py --fresh               # 重建 demo 源仓库
 
 一条必须知道的装配约束：进程 1 的调度循环**必须 inline 执行**
-（worker_pool_size=0）。真实并发档 config_p10 用线程池，而线程里的未捕获异常
+（worker_pool_size=0）。真实并发档 archive/config-history/config_p10 用线程池，而线程里的未捕获异常
 只终结那个 worker，解释器照样活着 —— §16「进程真死」便无从证明。
 `role_crash` 会按需强制 inline 并打印原因。这不是绕过：跨进程续跑要验的是
 "内存全丢 + 从磁盘恢复"，线程池恰好把这个性质抹掉。
@@ -48,7 +48,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 CRASH_AFTER = "VERIFICATION_COMPLETED"
-DEFAULT_CONFIG_DIR = "config_p10_offline"
+DEFAULT_CONFIG_DIR = "archive/config-history/config_p10_offline"
 TEMPLATE = PROJECT_ROOT / "tools" / "phase10_demo_source"
 
 GOAL = (
@@ -152,7 +152,7 @@ CLI_PROFILE_DIRNAME = "config_p10_cli"
 
 _CLI_AGENTS_YAML = """# 生成的本机 profile —— 三角色全部 provider: generic_cli + subprocess transport。
 # 意义：证明"不改一行核心代码"就能把进程内 Mock 换成真实子进程 CLI。
-# 与 config_p2 同形，只是运行目录/队列库指向 Phase 10 的续跑现场。
+# 与阶段性历史档 config_p2 同形，只是运行目录/队列库指向 Phase 10 的续跑现场。
 
 supervisor:
   provider: generic_cli
@@ -279,11 +279,11 @@ def role_crash(config_dir: str) -> int:
     config = load_profile(config_dir)
 
     # 崩溃要杀死的是**解释器**，所以本进程必须 inline 执行。
-    # config_p10 是真实并发档（worker_pool_size=2）—— 线程里的未捕获异常只会
+    # archive/config-history/config_p10 是真实并发档（worker_pool_size=2）—— 线程里的未捕获异常只会
     # 终结那一个 worker，进程照样活着，§16 的"进程真死"根本无从证明。
     # 这里不是绕过缺陷：进程边界要验的是"内存全丢 + 从磁盘恢复"，
     # 而线程池把崩溃降级成任务级异常，恰好把这个性质抹掉了。
-    # config_p10_offline 之所以用 0，注释写的就是这个原因。
+    # archive/config-history/config_p10_offline 之所以用 0，注释写的就是这个原因。
     s = config.settings.scheduler
     if s.worker_pool_size != 0:
         print(f"[process1] 强制 inline（原 worker_pool_size={s.worker_pool_size}）："

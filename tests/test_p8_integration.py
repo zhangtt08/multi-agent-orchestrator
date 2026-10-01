@@ -403,7 +403,7 @@ class TestDefaultsDisabled:
 
     def test_config_p8_enabled(self):
         from mao.core.config import load_config
-        config = load_config("config_p8", require_harness_file=True)
+        config = load_config("archive/config-history/config_p8", require_harness_file=True)
         assert config.settings.scheduler.enabled is True
         assert config.settings.scheduler.max_concurrent_tasks == 1
         assert config.settings.scheduler.default_max_attempts == 3

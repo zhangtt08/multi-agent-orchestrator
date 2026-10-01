@@ -228,15 +228,28 @@ class TestReleaseSurfaceTracked:
             assert proc.stdout.strip(), f"{package}/ 没有任何被跟踪的文件"
 
     def test_release_docs_exist(self):
+        """发布面的文档入口必须真的存在，而且**只有一个当前入口**。
+
+        2026-10-02 把仓库根那四份轮次文档（RELEASE_CHECKLIST / RELEASE_MANIFEST /
+        DELIVERY_CHECKLIST / RELEASE_NOTES_v1.0.0）合并成 `docs/RELEASE.md` 一份：
+        同一件事在四个地方各写一遍，每一处都会留着某一天的计数骗后人
+        （AGENTS.md「同一判断在两个地方各写一遍，就是缺陷的形状」）。
+        旧文原样进了 `docs/history/`，所以这里同时锁"归档还在"与"根目录不再有它们"。
+        """
         for name in ("README.md", "AGENTS.md", "VERSION", ".env.example",
                      "requirements.txt",
                      "requirements-semantic.txt", "requirements-ml.txt",
-                     "RELEASE_CHECKLIST.md", "RELEASE_MANIFEST.md",
-                     "DELIVERY_CHECKLIST.md", "docs/USER_GUIDE.md",
+                     "docs/RELEASE.md", "docs/USER_GUIDE.md",
                      "docs/OPERATOR_GUIDE.md", "docs/TROUBLESHOOTING.md",
                      "docs/ARCHITECTURE.md", "examples/task_single.json",
                      "examples/task_queue.json", "examples/config_minimal/settings.yaml"):
             assert (ROOT / name).is_file(), f"发布面缺 {name}"
+        for archived in ("RELEASE_CHECKLIST.md", "RELEASE_MANIFEST.md",
+                         "DELIVERY_CHECKLIST.md"):
+            assert (ROOT / "docs" / "history" / archived).is_file(), \
+                f"轮次记录应归档在 docs/history/：{archived}"
+            assert not (ROOT / archived).exists(), \
+                f"{archived} 又回到仓库根了 —— 根目录只留一份准确的 docs/RELEASE.md"
 
     def test_no_stale_phase_default_in_cli(self):
         """CLI 的默认配置目录只能是 config/ —— 曾经各处默认不一致，

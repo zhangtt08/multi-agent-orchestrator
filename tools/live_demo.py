@@ -133,7 +133,7 @@ def _git(args, cwd):
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="阶段 3.1 真实 Executor 闭合验证")
-    parser.add_argument("--config-dir", default="config_p3")
+    parser.add_argument("--config-dir", default="archive/config-history/config_p3")
     parser.add_argument("--runtime-dir", default="runtime_p31")
     parser.add_argument("--max-rounds", type=int, default=3)
     args = parser.parse_args(argv)

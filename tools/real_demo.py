@@ -93,7 +93,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="阶段三真实 Executor Demo")
     parser.add_argument("--dry-run", action="store_true",
                         help="只展示命令构造，不真的调用 Agent")
-    parser.add_argument("--config-dir", default="config_p3")
+    parser.add_argument("--config-dir", default="archive/config-history/config_p3")
     args = parser.parse_args(argv)
 
     ok, why = _preflight()

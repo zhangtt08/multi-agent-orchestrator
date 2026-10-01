@@ -553,7 +553,7 @@ class TestMetrics:
 class TestOfflineQueueIsIsolated:
     """地雷 24：离线演示档曾与生产档共用同一个 queue.db。
 
-    `config_offline/settings.yaml` 以前根本没有 scheduler 段，于是 db_path 落到
+    离线档的 `settings.yaml` 以前根本没有 scheduler 段，于是 db_path 落到
     默认值 `./runtime_scheduler/queue.db` —— 与 `config/` 一模一样，差别只有
     `enabled=False`。后果是"用离线档提交的任务躺进生产队列，自己不跑"，
     而下一次有人在 config/ 上开调度器就会去领它们：真实角色、花额度，
@@ -566,14 +566,14 @@ class TestOfflineQueueIsIsolated:
         return Path(load_config(config_dir).settings.scheduler.db_path).resolve()
 
     def test_the_two_configs_never_share_one_queue_file(self):
-        prod, offline = self._db("config"), self._db("config_offline")
+        prod, offline = self._db("config"), self._db("archive/config-history/config_offline")
         assert prod != offline, f"两份配置指向同一个队列库：{prod}"
 
     def test_offline_tier_still_does_not_start_a_scheduler(self):
         """隔离不能顺手把离线档变成会跑的档 —— 那是另一种"没人知道有东西在排队"。"""
         from mao.core import load_config
 
-        assert load_config("config_offline").settings.scheduler.enabled is False
+        assert load_config("archive/config-history/config_offline").settings.scheduler.enabled is False
         assert load_config("config").settings.scheduler.enabled is True
 
 

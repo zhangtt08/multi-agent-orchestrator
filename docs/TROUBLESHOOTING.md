@@ -40,7 +40,7 @@ python main.py --discover                        # 本机有哪些候选
 python tools\smoke_real_harness.py --dry-run     # 会发出的真实 argv（零配额）
 ```
 
-只想跑通不看真实 Agent：`--config-dir config_offline`（全 Mock）。
+只想跑通不看真实 Agent：`--config-dir archive/config-history/config_offline`（全 Mock）。
 
 ## 2. doctor 说 `authentication: cannot determine login state`，但真实调用是好的
 

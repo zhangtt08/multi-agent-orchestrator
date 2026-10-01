@@ -1,7 +1,7 @@
 """阶段五测试：Real Supervisor 的结构性保证。
 
 覆盖：Session 隔离（§2/§22）、Supervisor 只读完整性（§20）、
-Plan 契约修复（§13）、config_p5 绑定形态（§1/§23）、品牌隔离（§24）。
+Plan 契约修复（§13）、archive/config-history/config_p5 绑定形态（§1/§23）、品牌隔离（§24）。
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ from mao.core.models import (  # noqa: E402
 )
 
 
-def _build(config_dir: str = "config_p5", dry_run: bool = True):
+def _build(config_dir: str = "archive/config-history/config_p5", dry_run: bool = True):
     from mao.bootstrap import build_orchestrator
     from mao.core import load_config
 
@@ -106,7 +106,7 @@ class TestSupervisorIntegrity:
     def test_config_p5_supervisor_is_read_only(self):
         from mao.core import load_config
 
-        config = load_config(str(PROJECT_ROOT / "config_p5"))
+        config = load_config(str(PROJECT_ROOT / "archive/config-history/config_p5"))
         profile = config.profile_registry().resolve("codex_supervisor")
         assert profile.supports_file_write is False
         assert profile.supports_shell is False
@@ -118,7 +118,7 @@ class TestSupervisorIntegrity:
         """两者 extends 同一个底座，但 resolve 出来是两个独立 Profile。"""
         from mao.core import load_config
 
-        config = load_config(str(PROJECT_ROOT / "config_p5"))
+        config = load_config(str(PROJECT_ROOT / "archive/config-history/config_p5"))
         sup = config.profile_registry().resolve("codex_supervisor")
         rev = config.profile_registry().resolve("codex_reviewer")
         assert sup is not rev
@@ -131,7 +131,7 @@ class TestSupervisorIntegrity:
 # ===========================================================================
 class TestPlanContractRepair:
     def _orch(self):
-        return _build(config_dir="config_offline", dry_run=True)
+        return _build(config_dir="archive/config-history/config_offline", dry_run=True)
 
     def test_invalid_plan_then_repaired_plan_is_accepted(self, monkeypatch):
         """第一版 Plan 语义不合法 -> 发回 Supervisor 修 -> 第二版通过。"""
@@ -267,13 +267,13 @@ class TestPlanContractRepair:
 
 
 # ===========================================================================
-# §1 / §23 config_p5 绑定形态
+# §1 / §23 archive/config-history/config_p5 绑定形态
 # ===========================================================================
 class TestConfigP5Bindings:
     def test_three_roles_are_all_real_cli(self):
         from mao.core import load_config
 
-        config = load_config(str(PROJECT_ROOT / "config_p5"))
+        config = load_config(str(PROJECT_ROOT / "archive/config-history/config_p5"))
         for role in ("supervisor", "executor", "reviewer"):
             binding = getattr(config, role)
             assert binding.provider == "generic_cli", f"{role} 不是真实 CLI"
@@ -286,7 +286,7 @@ class TestConfigP5Bindings:
         from mao.core import Config, Role, Settings, load_config
         from mao.core.config import RoleBinding
 
-        base = load_config(str(PROJECT_ROOT / "config_p5"))
+        base = load_config(str(PROJECT_ROOT / "archive/config-history/config_p5"))
         config = Config(
             supervisor=RoleBinding(provider="mock_supervisor"),
             executor=base.executor,
@@ -303,7 +303,7 @@ class TestConfigP5Bindings:
     def test_max_plan_repair_attempts_setting_exists(self):
         from mao.core import load_config
 
-        config = load_config(str(PROJECT_ROOT / "config_p5"))
+        config = load_config(str(PROJECT_ROOT / "archive/config-history/config_p5"))
         assert config.settings.max_plan_repair_attempts == 1
 
 

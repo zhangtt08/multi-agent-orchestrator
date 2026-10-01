@@ -133,7 +133,7 @@ def tail_message(proc: subprocess.CompletedProcess) -> str:
 
 def check_config(py: str) -> Check:
     c = Check("Config")
-    for name in ("config", "config_offline", "examples/config_minimal"):
+    for name in ("config", "archive/config-history/config_offline", "examples/config_minimal"):
         try:
             out = _run([py, "-c",
                         "import sys; sys.path.insert(0, r'%s');"

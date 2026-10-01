@@ -320,8 +320,10 @@ def render_plan_form(fields: Optional[Dict[str, str]] = None,
         f"<span class='sub'>{warn}</span></div>"
         "<div class='sub'>切完只写一个项目档（JSON）到 "
         "<code>runtime_batch/planned/</code>，不动你的仓库、不起任何 agent。"
-        "要开始跑仍回命令行：<code>batch_project.py run --project 那个文件</code>；"
-        "跑与合入分别都要人授权。</div></form>")
+        "<b>清单会在下面那一格「界面切出来的项目档」里摊开，就地按『按这张清单开工』"
+        "才开始跑</b> —— 不必回命令行。命令行等价："
+        "<code>python tools\\batch_project.py run --project 那个文件</code>；"
+        "跑与合入分别都要人授权（默认档的合入授权来自证据闸门）。</div></form>")
 
 
 def plan_from_form(config_dir: str, mock_tier: bool,
@@ -973,7 +975,11 @@ def render_scheduler(runner: "SchedulerRunner", config_dir: str) -> str:
            "<button type='submit' name='action' value='start'>"
            "启动调度器（真实调用在这里发生）</button>")
         + "</form>")
-    log = runner.tail(40)
+    log = runner.tail(400)
+    # 尾巴那几行才是要看的，全文留在磁盘上 —— 以前这里把 40 行整个铺在页面上，
+    # 于是"看一眼进度"要滚过一屏重复的阶段行，而真正想读的那一行被推到底部。
+    # 折叠只改呈现：tail(400) 与那个文件都还在，一行都没少。
+    head = log[-3:] if log else []
     return (
         "<h2>2 · 让 agent 干活</h2>"
         "<div class='cost'><b>额度提示</b>：本页不会自己花钱。点了启动之后，"
@@ -983,9 +989,19 @@ def render_scheduler(runner: "SchedulerRunner", config_dir: str) -> str:
         f"<div>{toggle} <span class='sub'>{html.escape(runner.status_line())}</span>"
         "　<a href='/?watch=1'>每 5 秒自动刷新</a> ·"
         " <a href='/'>停止自动刷新</a></div>"
-        "<h2>调度器输出（子进程的 stdout，落在磁盘上而非内存里）</h2>"
-        + (f"<pre>{html.escape(chr(10).join(log))}</pre>" if log else
-           "<div class='sub'>还没有输出。启动调度器后这里会出现每个阶段的行。</div>"))
+        + (
+            "<details><summary><b>调度器输出</b>（子进程的 stdout，落在磁盘上而非"
+            f"内存里 · 这里最近 {len(log)} 行，全文在 "
+            f"<span class='mono'>{html.escape(str(runner.log_path))}</span>）"
+            "</summary>"
+            + "<pre class='log'>" + html.escape(chr(10).join(log)) + "</pre>"
+            + "</details>"
+            + "<div class='sub'>最后三行：" + html.escape(" ／ ".join(head))
+            + "</div>"
+            if log else
+            "<h2>调度器输出（子进程的 stdout，落在磁盘上而非内存里）</h2>"
+            "<div class='sub'>还没有输出 —— 这个日志文件还没被写过。"
+            "启动调度器后这里会出现每个阶段的行。</div>"))
 
 
 def _db_label(db_rel: str) -> str:
