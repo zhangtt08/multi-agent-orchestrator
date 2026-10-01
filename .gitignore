@@ -77,3 +77,6 @@ archive/config-history/config*/local.env
 .pytest_p*.log
 .pytest_*.xml
 .sched*.log
+
+# 工作台子进程的运行日志，本机现场，不是源码
+launcher.log
