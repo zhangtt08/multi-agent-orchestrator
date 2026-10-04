@@ -1177,26 +1177,87 @@ def safe_key(key: str) -> bool:
         c.isalnum() or c in "-_." for c in key)
 
 
-def same_origin(origin: str, host: str) -> bool:
-    """浏览器提交表单一定带 Origin；不带就拒。这条防的是别的网页替你这个
-    本机端口提交任务（那是要花你额度的动作）。"""
+def loopback_hosts(port: int) -> Tuple[str, ...]:
+    """这次真的绑定的那个端口上，允许出现的 Host 字面量。"""
+    return tuple(f"{h}:{port}" for h in ("127.0.0.1", "localhost", "[::1]"))
+
+
+def host_problem(host: str, port: int) -> str:
+    """空字符串 = 没问题。判据是**启动时绑定的端口**，不是请求自带的那一份。
+
+    为什么不能拿请求的 Host 去比 Origin（这是旧版的形状）：DNS rebinding 把
+    一个外域解析到 127.0.0.1 之后，浏览器发来的 Host 与 Origin 天生一致，
+    `same_origin` 于是永远通过，别的网页就能替这个本机端口提交要花额度的任务。
+    """
+    if not host:
+        return "缺少 Host 头"
+    if host.lower() not in loopback_hosts(port):
+        return f"Host={host} 不是本机回环地址（只接受 {', '.join(loopback_hosts(port))}）"
+    return ""
+
+
+#: 表单上限。Content-Length 是调用方给的，照着它读 = 一句 `curl` 就能把内存吃光。
+MAX_BODY_BYTES = 1024 * 1024
+
+
+def same_origin(origin: str, host: str, port: int) -> bool:
+    """浏览器提交表单一定带 Origin；不带就拒。Origin 还必须等于**本机允许的那个
+    Host**（而不只是等于请求自带的那一份），判据见 host_problem。"""
     from urllib.parse import urlsplit
 
     if not origin:
         return False
     got = urlsplit(origin).netloc.lower()
-    return bool(got) and got == (host or "").lower()
+    return bool(got) and got in loopback_hosts(port) and got == (host or "").lower()
 
 
-def make_handler(bound_ctx: Workbench):
+def make_handler(bound_ctx: Workbench, bound_port: int = 8765):
     class Page(BaseHTTPRequestHandler):
         # 提交目标恒等于启动时选定的 config：表单里那个 hidden 字段只是给人看的。
         # 接受请求里的任意 config 名 = 允许一条网页请求往别的队列库里写任务，
         # 而那正是 AGENTS.md 里"任务看起来消失了"的来源。
         ctx = bound_ctx
+        #: 判 Host/Origin 用的是**启动时绑定的端口**，不是请求自带的那一份。
+        port = bound_port
 
-        def _bytes(self) -> Dict[str, List[str]]:
-            length = int(self.headers.get("Content-Length") or 0)
+        def _local_ok(self) -> bool:
+            """每个请求先过这一道：Host 必须是本机回环 + 这次的端口。
+            拒的时候不回显任何业务数据。"""
+            problem = host_problem(self.headers.get("Host", ""), self.port)
+            if not problem:
+                return True
+            self._html(_page("拒绝", [
+                "<h1>400 不是本机请求</h1>",
+                f"<div class='sub'>{html.escape(problem)}</div>",
+                "<div class='sub'>命令行提交请用 "
+                "<code>python main.py queue submit</code>。</div>"],
+                refresh=0), 400)
+            return False
+
+        def _bytes(self) -> Optional[Dict[str, List[str]]]:
+            """None = 这条请求已经在本函数里被拒掉并回过响应了，调用方直接 return。"""
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                self._notice("Content-Length 不是一个数字，没有读这条请求", True)
+                return None
+            if length > MAX_BODY_BYTES:
+                # 先把超出的那一份**丢掉**再回话：直接回 413 就走人，Windows 上会
+                # 在客户端还在写的时候关掉 socket（RST），调用方看到的是"连接被中止"
+                # 而不是"表单太大"这句能照着行动的话。分块丢 = 内存仍然有上界。
+                left = length
+                while left > 0:
+                    chunk = self.rfile.read(min(65536, left))
+                    if not chunk:
+                        break
+                    left -= len(chunk)
+                self._html(_page("拒绝", [
+                    "<h1>413 表单太大</h1>",
+                    f"<div class='sub'>上限 {MAX_BODY_BYTES} 字节，这一条写了 "
+                    f"{length} 字节 —— 照 Content-Length 读多少就取多少，"
+                    "等于让一句 curl 决定这个进程吃多少内存。</div>"],
+                    refresh=0), 413)
+                return None
             raw = self.rfile.read(length).decode("utf-8", "replace") if length \
                 else ""
             return parse_qs(raw, keep_blank_values=True)
@@ -1234,6 +1295,8 @@ def make_handler(bound_ctx: Workbench):
         def do_GET(self) -> None:  # noqa: N802
             from urllib.parse import urlparse
 
+            if not self._local_ok():
+                return
             url = urlparse(self.path)
             query = parse_qs(url.query)
             path = url.path
@@ -1336,8 +1399,10 @@ def make_handler(bound_ctx: Workbench):
                 refresh=0), 404)
 
         def do_POST(self) -> None:  # noqa: N802
+            if not self._local_ok():
+                return
             if not same_origin(self.headers.get("Origin", ""),
-                               self.headers.get("Host", "")):
+                               self.headers.get("Host", ""), self.port):
                 self._html(_page("拒绝", [
                     "<h1>403 非同源提交</h1>",
                     "<div class='sub'>本页只接受从 "
@@ -1347,6 +1412,8 @@ def make_handler(bound_ctx: Workbench):
                     refresh=0), 403)
                 return
             form = self._bytes()
+            if form is None:  # 坏 Content-Length 或超过上限：_bytes 已经回过 400/413
+                return
             path = self.path.split("?")[0]
             if path == "/submit":
                 goal = (form.get("goal") or [""])[0]
@@ -1506,7 +1573,12 @@ def make_handler(bound_ctx: Workbench):
 
 
 def serve(ctx: Workbench, port: int) -> ThreadingHTTPServer:
-    httpd = ThreadingHTTPServer((HOST, port), make_handler(ctx))
+    handler = make_handler(ctx, port)
+    httpd = ThreadingHTTPServer((HOST, port), handler)
+    # port=0 是"让系统挑一个"（测试与端口被占的兜底都走这条）。判据要用**真正绑上**
+    # 的那个端口，否则 Host 白名单会写成 :<0>，连本机的正常请求都过不去。
+    handler.port = httpd.server_address[1]
+    return httpd
     httpd.daemon_threads = True
     return httpd
 

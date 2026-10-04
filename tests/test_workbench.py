@@ -111,11 +111,23 @@ class TestNoNewDependency:
 
 class TestPureHelpers:
     def test_same_origin_accepts_only_the_pages_own_host(self):
-        assert wb.same_origin("http://127.0.0.1:8765", "127.0.0.1:8765")
-        assert not wb.same_origin("", "127.0.0.1:8765")
-        assert not wb.same_origin("http://evil.example", "127.0.0.1:8765")
+        assert wb.same_origin("http://127.0.0.1:8765", "127.0.0.1:8765", 8765)
+        assert wb.same_origin("http://localhost:8765", "localhost:8765", 8765)
+        assert not wb.same_origin("", "127.0.0.1:8765", 8765)
+        assert not wb.same_origin("http://evil.example", "127.0.0.1:8765", 8765)
         # 端口不同就不是同源：8765 的页面不能往 8766 提交
-        assert not wb.same_origin("http://127.0.0.1:1", "127.0.0.1:8765")
+        assert not wb.same_origin("http://127.0.0.1:1", "127.0.0.1:8765", 8765)
+        # DNS rebinding 的现场形状：Host 与 Origin 同为外域、彼此自洽。
+        # 旧判据是"Origin 等于请求自带的 Host"，这一条会放行 —— 而 /submit 要花额度。
+        assert not wb.same_origin("http://mao.example", "mao.example", 8765)
+        assert not wb.same_origin("http://mao.example:8765", "mao.example:8765", 8765)
+        # Host 判据用的是启动时绑定的端口，与请求自带的那一份无关
+        assert wb.host_problem("localhost:8765", 8765) == ""
+        assert wb.host_problem("[::1]:8765", 8765) == ""
+        assert wb.host_problem("mao.example:8765", 8765)
+        assert wb.host_problem("127.0.0.1:8766", 8765)
+        assert wb.host_problem("0.0.0.0:8765", 8765)
+        assert wb.host_problem("", 8765) == "缺少 Host 头"
 
     def test_run_key_is_confined_to_id_characters(self):
         for bad in ("", "../etc", "rt 1", "a" * 65, "rt-x?y=1"):
