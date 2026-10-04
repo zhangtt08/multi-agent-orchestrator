@@ -20,7 +20,7 @@ import threading
 from pathlib import Path
 from typing import Any, Iterable, List, Optional
 
-from .clock import Clock, parse_ts
+from .clock import Clock, lease_is_stale, parse_ts
 from .errors import FailureClass
 from .models import (CONTROLABLE_STATUSES, PICKABLE_STATUSES, Priority,
                      RuntimeStatus, RuntimeTask, SchedulerEventType,
@@ -524,8 +524,7 @@ class TaskRepository:
                 "SELECT * FROM task_leases WHERE runtime_task_id = ?",
                 (candidate.runtime_task_id,)).fetchone()
             if old is not None:
-                old_expiry = parse_ts(old["expires_at"])
-                if old_expiry is not None and old_expiry > now:
+                if not lease_is_stale(old["expires_at"], now):
                     conn.execute("ROLLBACK")
                     return None
             from datetime import timedelta
@@ -661,12 +660,14 @@ class TaskRepository:
         return TaskLease.from_row(dict(row)) if row else None
 
     def lease_expired(self, runtime_task_id: str) -> bool:
+        """这一格现在有没有人**真的**持有租约（判据见 `clock.lease_is_stale`）。
+
+        以前这里是 `expiry is None or expiry <= now` 一行，`stale_running()` 里
+        是它的反面 `expiry is not None and expiry > now` 一行 —— 同一个判断写两遍
+        就是本项目定义的缺陷形状（地雷 42）。现在两边都问那一把尺。
+        """
         lease = self.get_lease(runtime_task_id)
-        if lease is None:
-            return True
-        expiry = parse_ts(lease.expires_at)
-        now = self.clock.now()
-        return expiry is None or expiry <= now
+        return lease_is_stale(getattr(lease, "expires_at", None), self.clock.now())
 
     # ------------------------------------------------------------------
     # §25/§26/§27 Pause / Resume / Cancel / Retry 请求
@@ -835,7 +836,12 @@ class TaskRepository:
     # §17/§18 Stale Lease Recovery
     # ------------------------------------------------------------------
     def stale_running(self) -> List[dict]:
-        """§63：全部 lease 过期的 RUNNING 任务（只读检查，不改状态）。"""
+        """§63：全部 lease 过期的 RUNNING 任务（只读检查，不改状态）。
+
+        "状态是 RUNNING"与"有人持有租约"是两件事（地雷 42）：这一份查询就是
+        stale recovery 的入口，也是界面那句"现在到底有没有人在跑"读的那一把尺 ——
+        判据统一在 `clock.lease_is_stale`，别再在别处重拼一遍。
+        """
         now = self.clock.now()
         rows = self._connection().execute(
             """SELECT t.*, l.expires_at AS lease_expires,
@@ -846,8 +852,7 @@ class TaskRepository:
             (RuntimeStatus.RUNNING.value,)).fetchall()
         out: List[dict] = []
         for row in rows:
-            expiry = parse_ts(row["lease_expires"])
-            if expiry is not None and expiry > now:
+            if not lease_is_stale(row["lease_expires"], now):
                 continue  # lease 仍然有效 —— 不动
             out.append(dict(row))
         return out

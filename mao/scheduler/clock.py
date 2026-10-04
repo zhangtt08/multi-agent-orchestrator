@@ -19,9 +19,28 @@ def parse_ts(value: str | None) -> datetime | None:
     if not value:
         return None
     try:
-        return datetime.fromisoformat(value)
-    except ValueError:
+        parsed = datetime.fromisoformat(value)
+        # Legacy timestamps without an offset were written in UTC.
+        return parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed
+    except (TypeError, ValueError):
         return None
+
+
+def lease_is_stale(expires_at: str | None, now: datetime) -> bool:
+    """这一格的租约到底有没有过期 —— "现在是不是真有人在这上面干活"的唯一判据。
+
+    为什么单独一个函数（而不是 repository 里写一遍、展示层再写一遍）：
+    `RUNNING` 这个状态字只说明"最后一次有人领过它"。进程被工具调用回收、被 SIGKILL、
+    机器重启之后都不会有人回去把状态改回来，于是那一格永远写着 RUNNING，
+    而实际上一个 agent 都没有 —— 业主看到的"跑到一半没了动静"就是这个形状
+    （AGENTS.md 地雷 42）。判据必须只有一份：领取时写 `task_leases`，
+    读的人按同一把尺判过期，界面与推进器问的都是这里。
+
+    没有租约行 / 时间戳读不出来都算"过期"：租约是领取动作的产物，
+    查不到就等于现在没人持有它（宁可说"没人在跑"，也不许说"在跑"）。
+    """
+    expiry = parse_ts(expires_at)
+    return expiry is None or expiry <= now
 
 
 class Clock(Protocol):
@@ -64,4 +83,5 @@ class FakeClock:
         self._now = moment
 
 
-__all__ = ["Clock", "SystemClock", "FakeClock", "parse_ts", "_now_iso"]
+__all__ = ["Clock", "SystemClock", "FakeClock", "lease_is_stale", "parse_ts",
+           "_now_iso"]

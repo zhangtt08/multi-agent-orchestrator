@@ -725,6 +725,7 @@ def dashboard(ctx) -> str:
               "bad" if cp["preparing"] else "up"),
         "</div>",
         _queue_chart(counts),
+        stale_running_note(config_dir),
         "<div class='grid' style='margin-top:14px'><div>",
         "<h2>任务队列　<a href='/ui/tasks'>全部 →</a></h2><div class='card'>",
         "<table><tr><th>运行</th><th>需求</th><th>阶段</th><th>状态</th>"
@@ -900,24 +901,123 @@ def _runner_is_up(ctx) -> bool:
     return bool(runner is not None and runner.running())
 
 
+def split_running(rows: List[dict]) -> Tuple[List[dict], List[dict], List[dict]]:
+    """状态字写着 RUNNING 的那些行，按**租约**分成三堆。
+
+    判据不在这一层，也不许在这一层重拼一遍（地雷 42：有没有人在跑看租约，
+    不看状态字；同一个判断写两遍就是本项目的缺陷形状）——
+    读层 `delivery_view.lease_state_of()` → `mao.scheduler.clock.lease_is_stale()`
+    已经算好带在每一行的 `lease_state` 上，这一层只负责把它分成
+    "真有人持有" / "没人持有（过期或压根没有租约行）" / "读不出来，没有记录"。
+
+    第三堆单独留着，是因为"读不出租约"与"租约确实没了"是两件事：
+    前者只能说"没有记录"，后者才能说"没人在跑"。
+    """
+    live: List[dict] = []
+    abandoned: List[dict] = []
+    unreadable: List[dict] = []
+    for row in rows:
+        if str(row.get("status")) != "RUNNING":
+            continue
+        state = str(row.get("lease_state") or "")
+        if state == dv.LEASE_HELD:
+            live.append(row)
+        elif state in (dv.LEASE_STALE, dv.LEASE_ABSENT):
+            abandoned.append(row)
+        else:
+            unreadable.append(row)
+    return live, abandoned, unreadable
+
+
+def _rt_names(rows: List[dict], limit: int = 2) -> str:
+    import html
+
+    return "、".join(
+        f"<span class='mono'>{html.escape(str(r.get('runtime_task_id'))[:14])}"
+        f"（{html.escape(str(r.get('stage') or '未知阶段'))}</span>"
+        for r in rows[:limit])
+
+
+def stale_running_note(config_dir: str, limit: int = 200) -> str:
+    """仪表盘那一格：把"队列里写着 RUNNING"与"有 agent 在跑"分开说。
+
+    `进行中` 那张卡的数是 `runtime_tasks.status` 那一列数出来的（`status_counts`），
+    它回答不了"这几条现在到底有没有人干活" —— 那个答案在 `task_leases` 表里。
+    所以这里补一行，并且把窗口写清楚：只数了最近 `limit` 条时不许说得像全队列。
+    """
+    import html
+
+    rows = dv.queue_rows(config_dir, limit=limit)
+    running_rows = [r for r in rows if str(r.get("status")) == "RUNNING"]
+    if not running_rows:
+        return ""
+    live, abandoned, unreadable = split_running(running_rows)
+    bits = []
+    if live:
+        bits.append(f"<span class='ok'>{len(live)} 条租约仍被持有</span>")
+    if abandoned:
+        bits.append(f"<span class='bad'>{len(abandoned)} 条没人持有租约</span>")
+    if unreadable:
+        bits.append(f"<span class='sub'>{len(unreadable)} 条读不出租约"
+                    "（没有记录，不猜）</span>")
+    window = (f"（这一页读的是最近 {limit} 条运行，不是全队列）"
+              if len(rows) >= limit else "")
+    lead = ""
+    if abandoned:
+        lead = ("<div class='note bad'>队列里那一格写着 RUNNING，但它的<b>租约已经没人续</b>"
+                " —— 按租约读，现在<b>没有 agent 在跑</b>：干活的那个进程被回收、被杀"
+                "或机器重启了。接管它不要重新提交（那等于再花一次额度）：点『启动调度器』，"
+                "stale recovery 会按最近的 COMMITTED 恢复点把这一格接着跑完；"
+                "批次那一格用的是同一个判据（<span class='mono'>worker_state()</span> "
+                "→ reclaimable → 起调度器接管）。命令行核对那一条租约："
+                "<span class='mono'>python main.py queue show "
+                + html.escape(str(abandoned[0].get("runtime_task_id") or ""))
+                + f" --config-dir {html.escape(config_dir)}</span></div>")
+    return ("<div class='sub'>RUNNING 这一列怎么读：" + "、".join(bits) + " "
+            + html.escape(window) + "</div>" + lead)
+
+
 def agent_activity_line(ctx, rows: List[dict]) -> str:
     """一句话说清"现在到底有没有 agent 在跑"。
 
     业主实跑后的问题是：页上写着"调度器运行中 pid=…"，人就以为 agent 在干活 ——
     其实调度器只是**在空转**，因为队列里一条待执行的都没有（提交那一步静默失败了）。
     "调度器活着"和"有 agent 在跑"是两件事，界面上必须分开说。
+
+    现在还有第三层：**状态字单独也证明不了"有 agent 在跑"**。一条 RUNNING 而
+    租约过期的行是崩溃留下的现场，以前这里把它读成"有 agent 在跑"，于是页面
+    与业主那句"跑到一半没了动静"同时成立（地雷 42 说的就是这一族）。
     """
     import html
 
     running = _runner_is_up(ctx)
-    active = [r for r in rows if str(r.get("status")) == "RUNNING"]
+    live, abandoned, unreadable = split_running(rows)
+    active = live
     pending = [r for r in rows if str(r.get("status")) in PENDING_STATUSES]
+    if abandoned:
+        return (
+            f"<div class='note bad'>有 <b>{len(abandoned)}</b> 条写着 RUNNING，"
+            "但它们的<b>租约已经没人续</b> —— 按租约读，现在<b>没有 agent 在跑</b>"
+            f"（{_rt_names(abandoned)}）。"
+            + (f"另外 {len(live)} 条的租约仍被持有。" if live else "")
+            + "接管不要重新提交（那等于再花一次额度）："
+            + ("调度器在跑 —— stale recovery 会在下一轮认领过期租约，"
+               "按最近的 COMMITTED 恢复点续跑。" if running else
+               "点『启动调度器』，它会认领过期租约并按最近的 COMMITTED 恢复点续跑。")
+            + "批次那一格同一个判据写作 reclaimable。</div>")
+    if unreadable and not live:
+        return (
+            f"<div class='note'>队列里有 {len(unreadable)} 条写着 RUNNING，"
+            "而这一台的队列库<b>读不出租约</b>（没有 task_leases 那一张表）—— "
+            "所以这一格只能说<b>没有记录</b>：不能据此说有 agent 在跑，"
+            f"也不能说没有（{_rt_names(unreadable)}）。"
+            "要确认，看下面那份调度器输出，或跑 "
+            "<span class='mono'>python main.py queue show &lt;rt-id&gt;"
+            f" --config-dir {html.escape(str(ctx.config_dir))}</span>。</div>")
     if active:
-        who = "、".join(f"<span class='mono'>{html.escape(str(r.get('runtime_task_id'))[:14])}"
-                        f"（{html.escape(str(r.get('stage') or '未知阶段'))}）"
-                        for r in active[:2])
-        return (f"<div class='note'>现在<b>有 agent 在跑</b>：{len(active)} 条 —— {who}。"
-                "这一页每 5 秒自己刷新。</div>")
+        who = _rt_names(active)
+        return (f"<div class='note'>现在<b>有 agent 在跑</b>：{len(active)} 条 —— {who}"
+                "（租约仍被持有）。这一页每 5 秒自己刷新。</div>")
     if pending and running:
         return (f"<div class='note bad'>调度器在跑，队列里有 {len(pending)} 条待领，"
                 "但一格都没开始 —— 通常是容量闸门（每 provider 1 次）或租约没释放。"
@@ -1238,9 +1338,26 @@ def _stop_reason(row: Dict[str, Any], config_dir: str) -> str:
     evidence = (f"<a href='/run/{rt}?config={cfg}'>证据 →</a>　"
                 f"<a href='/ui/flow/{rt}'>两个 agent</a>")
     if status == "RUNNING":
-        return ("<span class='ok'>在跑</span> <span class='sub'>当前阶段 "
-                f"<span class='mono'>{html.escape(str(row.get('stage') or '还没提交阶段'))}"
-                "</span>（进行中的模型调用不会被打断）</span>")
+        stage = ("<span class='mono'>"
+                 f"{html.escape(str(row.get('stage') or '还没提交阶段'))}</span>")
+        state = str(row.get("lease_state") or "")
+        if state == dv.LEASE_HELD:
+            return ("<span class='ok'>在跑</span> <span class='sub'>当前阶段 " + stage
+                    + f" · 租约 <span class='mono'>{html.escape(str(row.get('lease_worker') or '?'))}</span>"
+                    f" 到 {html.escape(str(row.get('lease_expires'))[:19])}"
+                    "（进行中的模型调用不会被打断）</span>")
+        if state in (dv.LEASE_STALE, dv.LEASE_ABSENT):
+            return ("<span class='bad'>状态写着 RUNNING，租约"
+                    + ("已过期" if state == dv.LEASE_STALE else "根本不存在")
+                    + "</span> <span class='sub'>—— 按租约读，这一格<b>没人真的在跑</b>"
+                    "（进程被回收/被杀/机器重启留下的现场）。当前阶段 " + stage
+                    + "。下一步不是重新提交（那等于再花一次额度）：点页面上方"
+                    "『启动调度器』，stale recovery 会按最近的 COMMITTED 恢复点接管"
+                    "</span><br>" + evidence)
+        return ("<span class='warn'>状态写着 RUNNING</span> <span class='sub'>"
+                "—— 这一台的队列库读不出租约（没有 task_leases 表），"
+                "所以**没有记录**说它到底有没有人在跑。当前阶段 " + stage
+                + "</span><br>" + evidence)
     if dv._is_live_failure(row):
         return (f"<span class='bad'>停在 {html.escape(status)}</span> "
                 f"<span class='sub'>{html.escape(err[:140]) or '（库里没写下原因）'}"
@@ -1288,6 +1405,18 @@ def _row_actions(row: Dict[str, Any], config_dir: str) -> str:
                 "<span class='mono'>python main.py queue retry " + rt
                 + " --config-dir " + cfg + "</span></span>")
     bits = []
+    if status == "RUNNING" and str(row.get("lease_state") or "") in (
+            dv.LEASE_STALE, dv.LEASE_ABSENT):
+        # 没人持有租约的那一格，"暂停/继续"都在等一个已经不存在的 worker。
+        # 能动的动作只有一个：让调度器去认领过期租约（不重新提交、不再花额度）。
+        return ("<form method='post' action='/scheduler' style='display:inline'>"
+                f"<input type='hidden' name='config' value=\"{cfg}\">"
+                "<input type='hidden' name='action' value='start'>"
+                "<button type='submit'>起调度器接管这一格</button></form>"
+                "<div class='sub'>认领过期租约 → 从最近的 COMMITTED 恢复点续跑；"
+                "<b>不要</b>重新提交那一条任务 —— 那等于为同一格再花一次额度。"
+                "命令行等价：<span class='mono'>python main.py scheduler run"
+                f" --config-dir {cfg}</span></div>")
     for action, label, cls, note in (
             ("pause", "暂停", "", "走到安全边界才停"),
             ("resume", "继续", "", "只认 PAUSED"),

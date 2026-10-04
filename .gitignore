@@ -80,3 +80,6 @@ archive/config-history/config*/local.env
 
 # 工作台子进程的运行日志，本机现场，不是源码
 launcher.log
+/.env
+/.env.*
+!.env.example

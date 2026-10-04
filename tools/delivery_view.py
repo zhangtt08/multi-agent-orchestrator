@@ -155,10 +155,23 @@ def _checkpoint_view(rt, settings) -> Dict[str, Any]:
 
 
 def _lease_view(repo, rt) -> Dict[str, Any]:
-    out: Dict[str, Any] = {"active": False, "expired": False, "detail": "无 lease"}
+    """这一格的租约事实 —— `expired` 与 `state` 都问同一把尺（`repo.lease_expired`）。
+
+    以前这里"没有 lease 行"就写 `expired=False`，而 repository 的
+    `lease_expired()` 对同一种现场答 True（没人持有 = 过期）。同一个判断在两个
+    地方各写一遍就是本项目的缺陷形状（地雷 42）：界面据此能把一条没人认领的
+    RUNNING 说成"稳定"。现在两边一致。
+    """
+    out: Dict[str, Any] = {"active": False, "expired": True,
+                           "detail": "无 lease 行 —— 现在没人持有这一格",
+                           "state": LEASE_ABSENT, "readable": True}
     try:
         lease = repo.get_lease(rt.runtime_task_id)
-    except Exception:  # noqa: BLE001
+    except Exception:                                       # noqa: BLE001
+        out["state"] = LEASE_UNKNOWN
+        out["expired"] = False
+        out["readable"] = False
+        out["detail"] = "读不动 task_leases —— 没有记录，不猜有没有人在跑"
         return out
     if lease is None:
         return out
@@ -167,8 +180,12 @@ def _lease_view(repo, rt) -> Dict[str, Any]:
                      f"expires={getattr(lease, 'expires_at', '?')}")
     try:
         out["expired"] = bool(repo.lease_expired(rt.runtime_task_id))
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception:                                       # noqa: BLE001
+        out["state"] = LEASE_UNKNOWN
+        out["readable"] = False
+        out["detail"] = "读不动 task_leases —— 没有记录，不猜有没有人在跑"
+        return out
+    out["state"] = LEASE_STALE if out["expired"] else LEASE_HELD
     return out
 
 
@@ -439,6 +456,19 @@ def judge(view: Dict[str, Any]) -> Dict[str, Any]:
     stability.append((lease_ok,
                       f"lease: {lease['detail']}"
                       + ("；已过期" if lease["expired"] else "")))
+    # 状态字写着 RUNNING 而租约没人持有 = 干活的人已经死了（被回收/SIGKILL/重启）。
+    # 这一条不说出来，检视器就会对着一条没人认领的运行说"稳定"（地雷 42）。
+    lease_state = str(lease.get("state") or "")
+    if status not in TERMINAL and lease_state in (LEASE_STALE, LEASE_ABSENT):
+        stability.append((False, (
+            f"这一格现在没有 agent 在跑：队列状态是 {status}，而"
+            + ("租约已过期" if lease_state == LEASE_STALE else "根本没有租约行")
+            + f"（{lease['detail']}）—— 接管它不要重新提交：起调度器，"
+            "stale recovery 会按最近的 COMMITTED 恢复点续跑，不再花一次额度 "
+            f"[{FRAMEWORK}]")))
+    elif status not in TERMINAL and lease_state == LEASE_HELD:
+        stability.append((True, f"租约仍被持有（{lease['detail']}）—— "
+                                f"这一格真的有人在跑 [{FRAMEWORK}]"))
     cp = view["checkpoint"]
     if cp["store"] == "已启用":
         stability.append((cp["chain"] > 0,
@@ -811,8 +841,42 @@ def _read_only(db: Path) -> sqlite3.Connection:
     return con
 
 
+#: 一行租约事实的四种结论（键名进看板行，界面与推进器读的是同一份）
+LEASE_HELD = "held"        # 有人持有有效租约 —— 这一格真的在跑
+LEASE_STALE = "stale"      # 租约已过期 —— 干活的人已经死了（被回收/SIGKILL/重启）
+LEASE_ABSENT = "absent"    # 队列里没有这一格的租约行 —— 没人持有它
+LEASE_UNKNOWN = "unknown"  # 这台库根本没有 task_leases 表：判据说不了，照实写
+
+
+def lease_state_of(rt: Dict[str, Any], now=None) -> str:
+    """队列行 → 租约结论。判据本身在 `mao.scheduler.clock.lease_is_stale`（只有一份）。
+
+    为什么要把"查不到表"与"表里没有这一行"分成两种：前者是**没有记录**，
+    后者是"确实没人持有这一格"。把它们混成一句"没人在跑"，就是在替现场编结论
+    （AGENTS.md 状态诚实那一条：答不出来源就写"没有记录"）。
+    """
+    if "lease_expires" not in rt:
+        return LEASE_UNKNOWN
+    from mao.scheduler.clock import lease_is_stale
+
+    expires = str(rt.get("lease_expires") or "")
+    if not expires:
+        return LEASE_ABSENT
+    if now is None:
+        from mao.scheduler import SystemClock
+
+        now = SystemClock().now()
+    return LEASE_STALE if lease_is_stale(expires, now) else LEASE_HELD
+
+
 def queue_rows(config_dir: str, limit: int = 8) -> List[Dict[str, Any]]:
-    """某份配置队列库里最近的运行（新→旧）。库不存在就返回空，不创建。"""
+    """某份配置队列库里最近的运行（新→旧）。库不存在就返回空，不创建。
+
+    带出 `task_leases` 那两列（`lease_expires` / `lease_worker`）：
+    "这一格现在到底有没有人真的在跑"的判据是租约，不是 `runtime_tasks.status`
+    （AGENTS.md 地雷 42）。读层不带出来，界面就只能拿状态字当"在跑"说出口 ——
+    崩溃留下的那一格会永远被报成有人在干活。
+    """
     db = queue_db_path(config_dir)
     if db is None:
         return []
@@ -821,12 +885,28 @@ def queue_rows(config_dir: str, limit: int = 8) -> List[Dict[str, Any]]:
     except sqlite3.Error:
         return []
     try:
-        rows = con.execute(
-            "SELECT runtime_task_id, task_id, status, attempt, max_attempts,"
-            " resume_epoch, submitted_at, finished_at, last_error,"
-            " workspace_path, workspace_strategy, execution_workspace_path,"
-            " task_payload FROM runtime_tasks ORDER BY submitted_at DESC LIMIT ?",
-            (int(limit),)).fetchall()
+        columns = ("t.runtime_task_id, t.task_id, t.status, t.attempt,"
+                   " t.max_attempts, t.resume_epoch, t.submitted_at,"
+                   " t.finished_at, t.last_error, t.workspace_path,"
+                   " t.workspace_strategy, t.execution_workspace_path,"
+                   " t.task_payload")
+        order = " ORDER BY t.submitted_at DESC LIMIT ?"
+        try:
+            # 老队列库可能根本没有 task_leases 表（那张表是随调度层一起加的）。
+            # 缺表不等于"没有运行"，不许因此把整页读成空 —— 只把租约那两列留空。
+            has_leases = con.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table'"
+                " AND name='task_leases'").fetchone() is not None
+        except sqlite3.Error:
+            has_leases = False
+        if has_leases:
+            sql = (f"SELECT {columns}, l.expires_at AS lease_expires,"
+                   " l.worker_id AS lease_worker FROM runtime_tasks t"
+                   " LEFT JOIN task_leases l"
+                   " ON t.runtime_task_id = l.runtime_task_id" + order)
+        else:
+            sql = f"SELECT {columns} FROM runtime_tasks t" + order
+        rows = con.execute(sql, (int(limit),)).fetchall()
         out = [dict(r) for r in rows]
         for row in out:                      # goal 就在队列行里，不用等 attempt 落盘
             payload = row.pop("task_payload", "") or ""
@@ -834,6 +914,9 @@ def queue_rows(config_dir: str, limit: int = 8) -> List[Dict[str, Any]]:
                 row["goal"] = str(json.loads(payload).get("goal", ""))
             except (ValueError, AttributeError):
                 row["goal"] = ""
+            if has_leases:
+                # 结论在行里带着，页面与命令行读的就是同一份（不再各算一遍）
+                row["lease_state"] = lease_state_of(row)
         return out
     except sqlite3.Error:
         return []
@@ -960,6 +1043,11 @@ def snapshot(config_dir: str, rt: Dict[str, Any]) -> Dict[str, Any]:
         "runtime_task_id": rt.get("runtime_task_id", ""),
         "task_id": task_id,
         "status": rt.get("status", ""),
+        # "这一格现在到底有没有人真的在跑"—— 判据是租约不是状态字（地雷 42）。
+        # 读层把结论算好带在行里，界面与推进器读的是同一把尺（clock.lease_is_stale）。
+        "lease_expires": str(rt.get("lease_expires") or ""),
+        "lease_worker": str(rt.get("lease_worker") or ""),
+        "lease_state": lease_state_of(rt),
         "attempt": rt.get("attempt", 0),
         "max_attempts": rt.get("max_attempts", 0),
         "resume_epoch": rt.get("resume_epoch", 0),

@@ -342,13 +342,24 @@ class TestFrameworkCommandEnv:
              / ("pytest.exe" if os.name == "nt" else "pytest")).exists(),
         reason="这个解释器的目录里没有 pytest 控制台脚本，本机不适用")
     def test_pytest_resolves_even_with_the_parent_path_stripped(self, monkeypatch,
-                                                                tmp_path):
-        """本机那台现场的直接回归：`pytest -q` 是合法命令，缺的只是激活 venv。"""
+                                                                tmp_path,
+                                                                path_without):
+        """本机那台现场的直接回归：`pytest -q` 是合法命令，缺的只是激活 venv。
+
+        "别处找不到 pytest"这一半是**现场**，不是机器的运气：上一台机器 PATH 里本来
+        就没有 pytest，所以那句前提从没响过；这一台装了系统级
+        `C:\\Program Files\\Python312\\Scripts\\pytest.EXE`，于是同一句 assert 变成
+        假红（地雷 38/47 的"测试靠环境过关"，只是这次是靠不过）。现在由 `path_without`
+        把那个目录从本进程的 PATH 上摘掉，**断言一条没减**：仍然要求换算出来的那一个
+        落在跑着框架的那个解释器自己的目录里。
+        """
         scripts = str(Path(sys.executable).parent).lower()
         monkeypatch.setenv("PATH", os.pathsep.join(
             p for p in os.environ["PATH"].split(os.pathsep)
             if p.lower() != scripts))
-        assert shutil.which("pytest") is None, "前提不成立：这条 PATH 里本来就有 pytest"
+        path_without("pytest")
+        assert shutil.which("pytest") is None, \
+            "现场没造出来：摘完之后这条 PATH 里仍然找得到 pytest"
         env = ex.framework_command_env()
         argv, note = ex.framework_command_argv(["pytest", "-q"], env)
         assert Path(argv[0]).name.lower().startswith("pytest")
