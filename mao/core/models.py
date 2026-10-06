@@ -513,13 +513,25 @@ class RoleRequirements(_StrictModel):
 
 
 class RolePolicy(_StrictModel):
-    """单个角色被允许做什么。第二阶段不接 OS 级沙箱，但模型与校验先立住。"""
+    """单个角色被允许做什么。第二阶段不接 OS 级沙箱，但模型与校验先立住。
+
+    命令这一维的判据在 `mao/core/policy.py`（`check_command` 与形状分类器），
+    这里只放声明 —— 别再在第二个地方重新拼"什么算危险"。
+    """
 
     workspace_write: bool = False
     shell: bool = False
     git: bool = False
     network: bool = False
+    #: 非空 = **严格白名单**：只有列出的命令名能在传输层起进程。
+    #: 空 = 不再等于"什么都许"（那是 v1.9.17 之前的装饰性默认）：
+    #: 此时仍然拦掉危险形状（内联代码解释器 / 破坏性标志 / 强推），
+    #: 见 `policy.DEFAULT_DENY_*` 与 `classify_command_shape()`。
     allowed_commands: List[str] = Field(default_factory=list)
+    #: 人类明确要"这一档什么都放开"时写 true（config/agents.yaml 的
+    #: `policy.roles.<role>.allow_any_command`）。默认 false，且它放开的是
+    #: **全部**形状判定（含白名单），所以只在受信目录里用。
+    allow_any_command: bool = False
 
 
 class ExecutionPolicy(_StrictModel):

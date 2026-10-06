@@ -34,7 +34,7 @@ from .agents import AgentRegistry
 from .core.config import Config, load_config
 from .core.logging_setup import register_redacted_keys
 from .core.orchestrator import Orchestrator
-from .core.policy import policy_from_config
+from .core.policy import PolicyEnforcer, policy_from_config
 from .core.prompts import PromptLibrary
 from .evidence import EvidenceCollector
 from .harness.profiles import ProfileRegistry
@@ -94,12 +94,19 @@ def build_orchestrator(
         workspace_root = runtime_path.parent / settings.workspace_dir
 
     transports = transport_registry or TransportRegistry()
+    # 权限策略：以前这里是硬编码的 `policy_from_config(None)`，也就是
+    # **配置里的 policy: 段根本没人读**，而 `allowed_commands` 空 = 全放开，
+    # 于是整块策略是装饰。现在配置进得来，并且同一个 PolicyEnforcer
+    # 同时交给 AgentRegistry（传输层的命令闸门）与 Orchestrator（角色闸门）。
+    policy = policy_from_config(config.policy)
+    enforcer = PolicyEnforcer(policy)
     registry = AgentRegistry(
         config.binding_map(),
         transport_registry=transports,
         profiles=profile_registry,
         dry_run=effective_dry_run,
         project_root=Path.cwd(),
+        policy_enforcer=enforcer,
     )
 
     wm = workspace_manager or WorkspaceManager(
@@ -122,7 +129,8 @@ def build_orchestrator(
         workspace_manager=wm,
         evidence_collector=evidence,
         verification_runner=verification,
-        policy=policy_from_config(None),
+        policy=policy,
+        policy_enforcer=enforcer,
         run_preflight=effective_preflight,
         max_response_repair_attempts=settings.max_response_repair_attempts,
         dry_run=effective_dry_run,

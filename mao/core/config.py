@@ -1,6 +1,6 @@
 """配置加载。
 
-config/agents.yaml   -> 角色与 provider 绑定（谁来做）
+config/agents.yaml   -> 角色与 provider 绑定（谁来做），顶层 `policy:` 段 = 权限策略（谁能做什么）
 config/settings.yaml -> 运行参数（怎么做：轮数、超时、runtime 目录）
 config/harness.yaml  -> Harness Profile（CLI 具体怎么调）—— 第二阶段新增
 
@@ -332,6 +332,11 @@ class Config(BaseModel):
     settings: Settings = Field(default_factory=Settings)
     # 原始 Profile 定义（未解析继承）。用 ProfileRegistry 解析。
     profiles: Dict[str, Any] = Field(default_factory=dict)
+    #: 角色权限策略（agents.yaml 顶层的 `policy:` 段，交给
+    #: `core.policy.policy_from_config`）。默认空 = 全部沿用默认判据：
+    #: 危险形状拦掉、没有额外白名单。
+    #: 人类要"这一档什么都放开"写 `policy: {roles: {executor: {allow_any_command: true}}}`。
+    policy: Dict[str, Any] = Field(default_factory=dict)
 
     def binding_map(self) -> Dict[str, Dict[str, Any]]:
         return {
@@ -443,6 +448,7 @@ def load_config(
         "reviewer": agents_raw.get("reviewer"),
         "settings": settings_raw,
         "profiles": profiles,
+        "policy": agents_raw.get("policy") or {},
     }
     for role_name in ("supervisor", "executor", "reviewer"):
         if not merged[role_name]:

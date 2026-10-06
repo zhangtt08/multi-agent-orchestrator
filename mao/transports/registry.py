@@ -20,6 +20,20 @@ _BUILTIN: Dict[str, Type[BaseTransport]] = {
 }
 
 
+def _guard_key(guard: Any) -> Any:
+    """把命令闸门折成可比较的缓存键。
+
+    `mao.core.policy.CommandGuard` 自带 `label`（角色 + 执行者身份），按它分档；
+    裸函数/闭包没有角色差异，按对象身份复用即可。
+    """
+    if guard is None:
+        return None
+    label = getattr(guard, "label", None)
+    if isinstance(label, str):
+        return label
+    return ("guard", id(guard))
+
+
 class TransportRegistry:
     """Transport 工厂。"""
 
@@ -58,13 +72,19 @@ class TransportRegistry:
     def get_or_create(self, name: str, **options: Any) -> BaseTransport:
         """按名字复用实例，避免同一 provider 反复构造。
 
-        ⚠️ 缓存键包含 `dry_run`。
+        ⚠️ 缓存键包含 `dry_run` 与 `command_guard`。
         原因：不同角色可以对同一个 Transport 声明不同的 dry_run
         （provider 级 override）。如果只按 name 缓存，先构造的那个会
         被另一个角色复用，导致"我明明写了 false 却在 dry-run" ——
         正是 §0 要消灭的那类静默状态分裂。
+
+        `command_guard` 同理而且更要紧：它是"这个角色能不能起这条 argv"的
+        判据绑定（见 `mao/core/policy.py` 的 `PolicyEnforcer.command_guard`）。
+        executor 与 reviewer 用同一个 subprocess Transport 类、
+        各自的政策不同 —— 复用同一个实例就是把两个角色的判据合成一份，
+        先注册的那个会赢。
         """
-        key = (name, options.get("dry_run"))
+        key = (name, options.get("dry_run"), _guard_key(options.get("command_guard")))
         if key not in self._instances:
             self._instances[key] = self.create(name, **options)
         return self._instances[key]

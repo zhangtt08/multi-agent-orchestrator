@@ -28,6 +28,7 @@ from typing import Any, Dict, List, Optional, Type
 
 from ..core.exceptions import AdapterNotFound, ConfigurationError
 from ..core.models import AgentCapabilities, Role
+from ..core.policy import PolicyEnforcer
 from ..transports.registry import TransportRegistry
 from .base import AgentAdapter
 from .mock_executor import MockExecutorAdapter, MockExecutorVariantB
@@ -85,6 +86,7 @@ class AgentRegistry:
         profiles: Optional[Any] = None,
         dry_run: bool = False,
         project_root: Optional[Any] = None,
+        policy_enforcer: Optional[Any] = None,
     ) -> None:
         self.binding_config: Dict[str, Any] = dict(binding_config or {})
         self.transport_registry = transport_registry or TransportRegistry()
@@ -93,6 +95,10 @@ class AgentRegistry:
         self.profiles = profiles
         self.dry_run = bool(dry_run)
         self.project_root = project_root
+        # 命令判据的执行者。装配层（bootstrap）把它和 Orchestrator 用的是**同一个**
+        # 实例 —— 违规记录只有一份，不会"传输层拦了但核心看不见"。
+        # 没注入时用默认政策（形状地板），不是"什么都放开"。
+        self.enforcer = policy_enforcer if policy_enforcer is not None else PolicyEnforcer()
         self._cache: Dict[str, Any] = {}
 
     # ------------------------------------------------------------------
@@ -164,6 +170,17 @@ class AgentRegistry:
                 # 只在 Transport 真的接受这个形参时注入，
                 # 否则会把签名简单的第三方 Transport 构造崩掉。
                 transport_options["dry_run"] = role_dry_run
+            if "command_guard" not in transport_options and self._transport_accepts(
+                transport_name, "command_guard"
+            ):
+                # 角色在这里绑死，Transport 只收到一个 `argv -> 放行或抛` 的回调，
+                # 于是"起不起这条命令"接在真正的执行边界上，而 §36 那条
+                # "Transport 不认识角色"的守卫仍然成立。
+                # 会起进程的 Transport 必须**显式声明** `command_guard` 形参
+                # （只写 **kwargs 的那种拿不到，见 test_p2_subprocess 的守卫）。
+                transport_options["command_guard"] = self.enforcer.command_guard(
+                    role_override
+                )
             transport = self.transport_registry.get_or_create(
                 transport_name, **transport_options
             )

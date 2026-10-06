@@ -21,6 +21,14 @@
    CREATE_NEW_PROCESS_GROUP + 进程组终止）。
 3. 非零退出码必须保留 stdout / stderr / exit_code，交给上层决定怎么处理。
    Transport 默认不把它变成"空响应"，避免错误被悄悄吃掉。
+4. **起进程之前过一道命令闸门**（`command_guard`）。
+   这里是"角色能不能跑这条 argv"唯一真正接在边界上的地方 —— 判据在
+   `mao/core/policy.py`（`PolicyEnforcer.check_command` / `classify_command_shape`），
+   本文件只负责"在 Popen 之前问一次"。装配层没注入时用的是
+   `shape_only_guard()`（形状地板照拦，白名单查不了，因为不知道角色）；
+   要显式关掉就把 `allow_all_command_guard()` 传进来。
+   闸门刻意**不认识角色**（§36 的守卫锁这条）：角色已经绑在注入的那个
+   可调用对象里，Transport 只看到一个 `argv -> 放行或抛` 的回调。
 
 与第一阶段的关系
 ----------------
@@ -39,7 +47,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import (Any, Callable, Dict, List, Optional, Sequence)
 
 from ..core.exceptions import (
     AgentExecutionError,
@@ -47,7 +55,14 @@ from ..core.exceptions import (
     CommandNotFoundError,
 )
 from ..core.models import CommandInvocation, ProcessResult, utcnow
+from ..core.policy import shape_only_guard
 from .base import BaseTransport, TransportRequest, TransportResponse
+
+
+#: 命令闸门的形状：吃 argv，要么放行（返回 None），要么抛 PolicyViolationError。
+#: 由 `mao/core/policy.py` 造出来（`PolicyEnforcer.command_guard(role)` /
+#: `shape_only_guard()` / `allow_all_command_guard()`）。
+CommandGuard = Callable[[Sequence[Any]], None]
 
 
 def extract_json_block(text: str) -> Optional[str]:
@@ -79,6 +94,7 @@ class SubprocessTransport(BaseTransport):
         default_timeout_seconds: float = 600.0,
         allowed_exit_codes: Optional[Sequence[int]] = None,
         strip_json: bool = False,
+        command_guard: Optional[CommandGuard] = None,
         **options: Any,
     ) -> None:
         super().__init__(**options)
@@ -92,6 +108,9 @@ class SubprocessTransport(BaseTransport):
         self.default_timeout_seconds = float(default_timeout_seconds)
         self.allowed_exit_codes = list(allowed_exit_codes or [0])
         self.strip_json = strip_json
+        # 没注入 = 用默认的形状地板（**不是**"什么都放开"，那正是这一轮修掉的
+        # 装饰性默认）。装配层会按角色注入带白名单判据的那一份。
+        self.command_guard: CommandGuard = command_guard or shape_only_guard()
 
         self._lock = threading.Lock()
         self._process: Optional[subprocess.Popen] = None
@@ -155,6 +174,9 @@ class SubprocessTransport(BaseTransport):
             )
 
         argv = list(invocation.argv)
+        # 执行边界上的那一道闸门（判据在 mao/core/policy.py）。放在解析 argv[0]
+        # 与 Popen 之前：被拦下的命令**一次都不会被起起来**，而不是起一半。
+        self.command_guard(argv)
         executable = self._resolve_argv0(argv)
         argv[0] = executable
 

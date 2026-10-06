@@ -39,6 +39,7 @@ from .exceptions import (
     IllegalStateTransition,
     InvalidAgentResponse,
     OrchestratorError,
+    PolicyViolationError,
     PreflightError,
     StateError,
     TaskControlInterrupt,
@@ -191,6 +192,7 @@ class Orchestrator:
         evidence_collector: Optional[Any] = None,
         verification_runner: Optional[Any] = None,
         policy: Optional[ExecutionPolicy] = None,
+        policy_enforcer: Optional[PolicyEnforcer] = None,
         preflight: Optional[PreflightCheck] = None,
         agent_call_log: Optional[AgentCallLog] = None,
         run_preflight: bool = True,
@@ -231,7 +233,10 @@ class Orchestrator:
 
         # ---- 第二阶段状态 ----
         self.policy = policy or ExecutionPolicy()
-        self.enforcer = PolicyEnforcer(self.policy)
+        # 装配层（bootstrap）会把同一个 enforcer 同时交给 AgentRegistry 与这里：
+        # 传输层拦下的违规与核心拦下的违规进**同一份**记录，
+        # 不然"违规 ledger"只看得见一半（地雷 45 那句"判据要问框架自己那一份记录"）。
+        self.enforcer = policy_enforcer or PolicyEnforcer(self.policy)
         self.dry_run = bool(dry_run)
         self.run_preflight = bool(run_preflight)
         self.max_response_repair_attempts = int(max_response_repair_attempts)
@@ -644,6 +649,11 @@ class Orchestrator:
                 response = None
             except (AgentTimeoutError, AgentUnavailableError, AgentExecutionError) as exc:
                 # 执行类错误属于"这次调用没成功"，不是格式问题，不做 schema 修复
+                raise
+            except PolicyViolationError:
+                # 传输层的命令闸门拦下来的：**原样**抛。
+                # 把它折成 "adapter raised unexpectedly" 就丢了"是被策略拒的"
+                # 这件事（地雷 49：只留退出码不是判据）。
                 raise
             except Exception as exc:  # Adapter 内部未包装异常
                 raise AgentExecutionError(

@@ -24,6 +24,15 @@ from mao.transports.process import display_argv, run_once  # noqa: E402
 from mao.transports.subprocess_transport import SubprocessTransport  # noqa: E402
 
 FAKE_CLI = PROJECT_ROOT / "tests" / "fake_cli_agent.py"
+#: 进程机制测试用的外部程序。v1.9.18 起传输层在 Popen 之前过命令闸门，
+#: `python -c` 这一类内联代码形状按默认政策被拦；这些用例测的是 stdout /
+#: stdin 管道 / 超时 / 退出码 / 复用，所以换成脚本文件形状，
+#: **被测性质不变**（政策的回归在 test_policy_execution_boundary.py）。
+PROBE = PROJECT_ROOT / "tests" / "spawn_probe.py"
+
+
+def probe(*args: str) -> list[str]:
+    return [sys.executable, str(PROBE), *args]
 
 
 def invocation(argv: list[str], *, stdin: str | None = None,
