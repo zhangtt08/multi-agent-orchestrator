@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import re
 import textwrap
 from pathlib import Path
 
@@ -82,12 +83,56 @@ class TestSessionResumeHonesty:
         caps = AgentCapabilities(**profile.capability_flags())
         assert caps.supports_session_resume is False
 
+    def test_no_profile_claims_resume_without_an_id_from_the_cli(self):
+        """每一档都要自洽：**声明不能续接**的档不许带着会话键出门。
+
+        判据取 `supports_session_resume`（`SessionResumePlanner` 与
+        `command_builder` 读的就是它），不取 `resume_strategy` ——
+        后者从第二阶段建模以来**没有任何一处代码读它**，只在演示生成的
+        YAML 里出现；拿它当闸门会得到一个"配置写了、行为不管"的假判据。
+        这条覆盖全部 shipped 档（生产 `config/` 与 p3 那份现场档）。
+
+        第一次跑就量到一条真的不一致：`opencode_executor` 有
+        `resume_argument: --session` 而 `resume_strategy: none` ——
+        按 `resume_strategy` 判它就有罪，按真正生效的那个键判它才无罪。
+        """
+        for config_dir in ("config", "archive/config-history/config_p3"):
+            from mao.core import load_config
+
+            registry = load_config(
+                str(PROJECT_ROOT / config_dir)).profile_registry()
+            for name, profile in registry.all().items():
+                if profile.capability_flags().get("supports_session_resume"):
+                    continue      # 这一档明说支持续接，键是它该带的
+                for key, value in profile.model_dump().items():
+                    if isinstance(value, bool):
+                        continue      # 能力声明不是标识
+                    if "session" in key or key == "resume_argument":
+                        assert value in (None, "", []), (
+                            f"{config_dir}/{name}.{key} = {value!r} "
+                            "但这一档声明不支持会话续接")
+                dumped = profile.model_dump_json()
+                assert not re.search(r"ses?_[A-Za-z0-9]{6,}", dumped), name
+
     def test_no_fake_session_id_in_profile(self):
-        """Profile 里不能出现任何伪造的 session 标识。"""
+        """Profile 里不能出现任何伪造的 session 标识。
+
+        判据按**值**不按字面键名：`HarnessProfile` 现在有 `session_id_pattern` /
+        `resume_argument` 这些字段，序列化出来键永远在（值为 null），
+        所以以前那种 `"session_id" not in dumped` 的 substring 判法在字段
+        加进来那一刻就必然转红 —— 它量的是"这个字段存不存在"，
+        而要说的是"这一档有没有带着一个 id 或参数出门"。
+        """
         registry = _real_registry()
         profile = registry.resolve("real_executor")
         dumped = profile.model_dump_json()
-        assert "session_id" not in dumped or "resume_argument" not in dumped
+        for key, value in profile.model_dump().items():
+            if isinstance(value, bool):
+                continue          # `supports_session_resume` 是能力声明，不是标识
+            if "session" in key or key == "resume_argument":
+                assert value in (None, "", []), (key, value)
+        # 字面量的会话 id（provider 签发的那种形状）一个字都不许出现在档里
+        assert not re.search(r"ses?_[A-Za-z0-9]{6,}", dumped)
         # resume_argument 在 none 策略下不应设置
         assert profile.resume_argument in (None, "")
 

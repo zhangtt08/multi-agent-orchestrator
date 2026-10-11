@@ -2,8 +2,12 @@
 
 旧形状是 `same_origin(Origin, 请求自带 Host)` —— 看着像同源校验，其实什么也没挡：
 DNS rebinding 把一个外域解析到 127.0.0.1 之后，浏览器发来的 Host 与 Origin 天生一致，
-于是别的网页可以替这个本机端口提交**要花额度**的任务（/submit、/credentials）。
+于是别的网页可以替这个本机端口提交**要花额度**的任务（/go、/retry）。
 现在的判据是"启动时真的绑上的那个回环端口"，与请求自带的那一份无关。
+
+服务层现在只有一处：`tools/app.py` 那一页。`tools/workbench.py` 只剩判据函数，
+所以这里的 fixture 起的是 A.serve，而 `host_problem` 仍然直接问 workbench ——
+判据没搬走，搬走的只有网页。
 
 这一组全走真 HTTP（AGENTS.md 地雷 28：函数级调用看不见"连接被掐断"这种失败形状）。
 """
@@ -12,6 +16,7 @@ import threading
 
 import pytest
 
+import tools.app as A
 import tools.workbench as wb
 
 
@@ -24,12 +29,12 @@ class _Runner:
 
 @pytest.fixture()
 def srv(tmp_path, monkeypatch):
-    cfg = tmp_path / "cfg"
+    cfg = tmp_path / "config"
     (cfg / "config").mkdir(parents=True)
+    monkeypatch.setattr(A, "ROOT", cfg)
     monkeypatch.setattr(wb, "ROOT", cfg)
-    ctx = wb.Workbench(config_dir="config", runner=_Runner(), real_roles=False,
-                       db_rel="./runtime_scheduler/queue.db")
-    httpd = wb.serve(ctx, 0)
+    app = A.App(config_dir="config", runner=_Runner(), real_roles=False)
+    httpd = A.serve(app, 0)
     th = threading.Thread(target=httpd.serve_forever, daemon=True)
     th.start()
     yield httpd.server_address[1]
@@ -65,7 +70,7 @@ def test_合法回环请求照常能读(srv):
 
 def test_外域提交的表单被拒(srv):
     """这是最要紧的一条：花钱的那两个入口不能由别的网页驱动。"""
-    for path in ("/submit", "/credentials"):
+    for path in ("/go", "/retry"):
         status, text = _call(srv, "POST", path, host=f"127.0.0.1:{srv}",
                              origin="http://evil.example",
                              body="goal=x&workspace=")

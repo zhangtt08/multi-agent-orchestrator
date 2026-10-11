@@ -451,3 +451,49 @@ def test_missing_command_is_rejected_at_profile_level():
 
     with pytest.raises(ValidationError):
         HarnessProfile(name="ghost", command="", prompt_mode=PromptMode.STDIN)
+
+
+class TestUnsetEndpointDoesNotEraseTheHost:
+    """`${VAR}` 没设上时**不写这个键**，而不是写成空串（2026-10-09 业主实测）。
+
+    `claude` 读的是 `process.env.ANTHROPIC_BASE_URL || 默认端点` —— 空串是"有值"，
+    于是宿主里本来能用的端点（cc-switch 配好的那一份）被 MAO 一句话擦掉，
+    按『开工』之后连批次状态文件都没有，而页面上看不出来。
+    真要清空那一格的人写的是字面量 `KEY: ""`，那一条必须照旧生效。
+    """
+
+    def _build_env(self, profile_env, monkeypatch, base_env=None):
+        from mao.harness.profiles import HarnessProfile
+        from mao.transports.command_builder import CommandBuilder
+
+        for k, v in (profile_env or {}).items():
+            monkeypatch.delenv(k, raising=False)
+        monkeypatch.setenv("ANTHROPIC_MODEL", "host-model-value")
+        monkeypatch.delenv("MAO_CLAUDE_BASE_URL", raising=False)
+        prof = HarnessProfile(name="probe", command="claude",
+                              environment=dict(profile_env or {}))
+        builder = CommandBuilder(base_env=dict(base_env or {}))
+        return builder._resolve_env(prof)
+
+    def test_an_unset_reference_leaves_the_host_value_alone(self, monkeypatch):
+        env = self._build_env({"ANTHROPIC_MODEL": "${MAO_CLAUDE_MODEL}"},
+                              monkeypatch)
+        assert env["ANTHROPIC_MODEL"] == "host-model-value", \
+            "没设上的引用被展开成空串，等于把宿主已有的端点/模型擦掉"
+
+    def test_a_set_reference_still_wins(self, monkeypatch):
+        monkeypatch.setenv("MAO_CLAUDE_MODEL", "page-filled-model")
+        env = self._build_env({"ANTHROPIC_MODEL": "${MAO_CLAUDE_MODEL}"},
+                              monkeypatch)
+        assert env["ANTHROPIC_MODEL"] == "page-filled-model"
+
+    def test_an_explicit_empty_literal_still_clears_the_key(self, monkeypatch):
+        env = self._build_env({"ANTHROPIC_MODEL": ""}, monkeypatch)
+        assert env["ANTHROPIC_MODEL"] == "", \
+            "字面量空串是作者**明说**要清空，这一条不许被顺手放宽"
+
+    def test_a_base_env_value_counts_as_set(self, monkeypatch):
+        env = self._build_env({"ANTHROPIC_MODEL": "${MAO_CLAUDE_MODEL}"},
+                              monkeypatch,
+                              base_env={"MAO_CLAUDE_MODEL": "from-base-env"})
+        assert env["ANTHROPIC_MODEL"] == "from-base-env"

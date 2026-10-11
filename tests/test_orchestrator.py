@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 
 import pytest
 
@@ -522,6 +523,57 @@ class TestPromptExternalisation:
     def test_non_strict_mode_returns_empty(self, tmp_path):
         lib = PromptLibrary(root=tmp_path / "empty", strict=False)
         assert lib.render("supervisor.plan") == ""
+
+
+# ---------------------------------------------------------------------------
+# Prompt 变量契约（2026-10-08 省 token 实测时量出来的）
+# ---------------------------------------------------------------------------
+#: 已知**送出去但没有任何模板用得上**的变量。逐条列在这里而不是悄悄留着：
+#: 之前 reviewer.review 的 `plan` 就是这一类 —— 每次里程碑把整个 plan
+#: 序列化成 indent JSON（约 11 KB）再丢掉，而注释写着"Reviewer 拿到方案"。
+#: 判据是双向的：多一条要红（新债），少一条也要红（有人把它接进模板，
+#: 那就是一次真实的输入面变化，得当成变化对待而不是顺手改过）。
+KNOWN_UNRENDERED_VARS = {
+    ("executor.execute", "max_rounds"),
+    ("executor.repair", "acceptance_criteria"),
+    ("executor.repair", "executor_prompt"),
+    ("reviewer.review", "previous_reviews"),
+    ("reviewer.review", "workspace"),
+}
+
+_PLACEHOLDER = re.compile(r"(?<!\{)\{([a-z_][a-z0-9_]*)\}(?!\})")
+
+
+class TestPromptVariableContract:
+    @staticmethod
+    def _watch(recorder):
+        class Watch(PromptLibrary):
+            def render(self, name, variant=None, **variables):
+                body = self.load(name, variant=variant)
+                used = set(_PLACEHOLDER.findall(body))
+                for key in variables:
+                    if key not in used:
+                        recorder["unrendered"].add((name, key))
+                for ph in used:
+                    if ph not in variables:
+                        # 模型会读到字面量 {ph} —— 那是半截 Prompt（§11 反对的）
+                        recorder["bare"].add((name, ph))
+                return super().render(name, variant=variant, **variables)
+
+        return Watch
+
+    def test_no_new_variable_is_computed_and_then_dropped(self, tmp_path):
+        recorder = {"unrendered": set(), "bare": set()}
+        for script in (None, "immediate_pass"):
+            orch = build(make_config(), tmp_path)
+            orch.prompts = self._watch(recorder)(
+                root=orch.prompts.root, strict=False)
+            orch.run(make_task() if script is None
+                     else make_task(script=script))
+        assert recorder["unrendered"] == KNOWN_UNRENDERED_VARS
+        assert not recorder["bare"], (
+            "模板里的占位没有被传进来，模型会看到字面量的花括号："
+            + str(sorted(recorder["bare"])))
 
 
 # ---------------------------------------------------------------------------

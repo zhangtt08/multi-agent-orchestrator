@@ -182,6 +182,24 @@ class TestProductionConfigInvariants:
         assert bound == declared, (
             f"绑定={sorted(bound)} 容量键={sorted(declared)} —— 两边必须同名")
 
+    def test_every_shipped_profile_declares_structured_output(self):
+        """任何打算被绑到角色上的档都得声明结构化输出。
+
+        这不是洁癖：`mao/agents/generic_cli.py` 里三个角色的 required 清单都含
+        `supports_structured_output`，声明 false 的档**连 preflight 都过不去**。
+        2026-10-08 用 OpenCode 实测时正是撞在这上面 —— 那一条我给的是
+        `supports_json_output: false`（当时没实测过它的结构化），结果任务直接
+        BLOCKED，一句 `missing supports_structured_output`。后来按 codex/claude 那
+        两段的同一做法处理：能力声明为 true，但**不用** CLI 的 json 旗标（交回的
+        是信封，框架的抽取器不解），结构化靠 prompt 约束 + 文本抽取。
+        """
+        from mao.core.config import load_config
+
+        reg = load_config("config", require_harness_file=True).profile_registry()
+        silent = [n for n in reg.names()
+                  if not bool(getattr(reg.resolve(n), "supports_json_output", False))]
+        assert not silent, f"这些档声明了没有结构化输出，绑到任何角色都会 BLOCKED：{silent}"
+
     def test_checkpoint_durable_by_default(self, settings):
         cp = settings.checkpoint
         assert cp.enabled is True

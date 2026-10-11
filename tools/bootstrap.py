@@ -75,11 +75,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     print()
     if worst == OK:
         print("结论：可以跑。下一步：")
-        print("  python tools/smoke_test.py            # 不烧配额的端到端自检")
-        print("  python main.py queue submit --goal \"...\" --workspace <目录>")
-        print("  python main.py scheduler run")
+        print("  双击  开始使用.bat                # 打开那一页，写一句话，按开工")
+        print("  或    python tools\\app.py")
+        print("  不花钱先看一遍整条交付路径：python tools\\app.py --rehearsal")
     elif worst == WARN:
         print("结论：可以跑，但有降级项（见上面 WARN 的 → 提示）。")
+        print("  那一页的第一屏会直接写明哪个角色用不了、该敲哪一句 —— 双击 开始使用.bat 就能看到。")
     else:
         print("结论：有阻塞项。按上面每条 → 提示修完再跑 bootstrap。")
     print("本工具不安装任何东西、不改 PATH/注册表、不下载模型、不删文件。")

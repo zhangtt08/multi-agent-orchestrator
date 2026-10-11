@@ -47,6 +47,72 @@ real_executor:
   extra_args: ["-p", "--permission-mode", "acceptEdits"]
 
 # ---------------------------------------------------------------------------
+# Claude Code 接自备端点（DeepSeek 一类 Anthropic 兼容端点走这一档）
+# ---------------------------------------------------------------------------
+# 为什么用 `environment` 而不是往 argv 里塞参数：`claude` 的端点与模型没有
+# "provider/profile"那种旗标，实测能用的只有环境变量、它自己的 settings.json
+# 里的 env 块，或 `--settings <json>`。本框架的 command_builder 会按 `${VAR}`
+# 展开 profile 的 environment（未设置的展开成空串，而这个 CLI 读
+# `process.env.ANTHROPIC_BASE_URL || 默认端点`，空串等于不覆盖）。
+# 两个键都从**本文件**派生，不在界面上抄第二份清单。
+# ★ 只映射不是凭据的那两个。第三个 Anthropic 变量（token）故意不在这里出现：
+#   这一页不收 key（有测试锁这条），它走 CLI 自己的登录态或由人写进 .env。
+# ★ 一份可能盖掉这里的文件：`~/.claude/settings.json` 的 `env` 块。它的注入
+#   顺序在进程环境变量之后，所以那台机器上若写着 ANTHROPIC_BASE_URL，
+#   这一档的端点会被它顶掉。软件只读它、报告"那份文件里写了哪几个键"，
+#   不改它 —— 那是别人的凭据与历史。
+# ★ 这一档**没有**在 settings.yaml 的 capacity.providers 里预加同名键：有一条
+#   守卫（test_capacity_keys_match_the_bound_profiles）要求"绑着的档"与"容量键"
+#   两边一一对应，多一个没绑的键它就红 —— 那是两份文件漂移的机械哨兵，不是障碍。
+#   所以加键这一步留到真的把角色绑到这一档的时候：换档那一格会把这句话打出来，
+#   `role_wiring.set_binding` 的回执里也带着它（缺键不报错，只静默用默认并发）。
+claude_endpoint_executor:
+  extends: real_executor
+  description: "Executor：Claude Code + 自备端点（端点与模型在本页填，key 不在这里）"
+  environment:
+    ANTHROPIC_BASE_URL: "${MAO_CLAUDE_BASE_URL}"
+    ANTHROPIC_MODEL: "${MAO_CLAUDE_MODEL}"
+
+# ---------------------------------------------------------------------------
+# Claude Code —— 只读角色（拆目标 / 判定）
+# ---------------------------------------------------------------------------
+# 为什么现在才加：2026-10-09 业主实测，这一档**不存在**，而他机器上装的是 Claude
+# （cc-switch 里 claude=AICodeMirror）。换档那一格于是只能给他两个选择：
+# 要么用 Codex 的只读档（他不想用 codex），要么把执行档硬塞进验收格 —— 他选了后者
+# （supervisor/reviewer 都绑成 claude_endpoint_executor），按『开工』之后什么都没发生，
+# 也说不清是哪一步不对。**没有合这一格的档，选择逻辑再好也是空的。**
+# 只读这件事有可证的开关：本机 `claude --help` 里 `--permission-mode` 的取值含
+# "plan"（只出计划、不改文件）。对照地雷 53 ②：OpenCode / Gemini / Qwen 那三家
+# 没有这种可证的只读开关，所以那三家**仍然只有执行档**。
+# ★ 参数形状本机实测过；`plan` 模式的实际行为没有花额度跑过 —— 页面上不说它是
+#   "验证过的"，第一次真跑由业主按『开工』那一下证明（那一次本来就要花额度）。
+real_supervisor:
+  extends: base_real_cli
+  description: "Supervisor：Claude Code 只读（拆目标用，不改文件）"
+  extra_args: ["-p", "--permission-mode", "plan"]
+  supports_file_write: false
+
+real_reviewer:
+  extends: base_real_cli
+  description: "Reviewer：Claude Code 只读（判 PASS / FAIL，不改文件）"
+  extra_args: ["-p", "--permission-mode", "plan"]
+  supports_file_write: false
+
+claude_endpoint_supervisor:
+  extends: real_supervisor
+  description: "Supervisor：Claude Code + 自备端点（端点与模型在本页填，key 不在这里）"
+  environment:
+    ANTHROPIC_BASE_URL: "${MAO_CLAUDE_BASE_URL}"
+    ANTHROPIC_MODEL: "${MAO_CLAUDE_MODEL}"
+
+claude_endpoint_reviewer:
+  extends: real_reviewer
+  description: "Reviewer：Claude Code + 自备端点（端点与模型在本页填，key 不在这里）"
+  environment:
+    ANTHROPIC_BASE_URL: "${MAO_CLAUDE_BASE_URL}"
+    ANTHROPIC_MODEL: "${MAO_CLAUDE_MODEL}"
+
+# ---------------------------------------------------------------------------
 # Codex CLI —— 只读角色（Supervisor / Reviewer）
 # ---------------------------------------------------------------------------
 base_codex_cli:
@@ -66,6 +132,20 @@ base_codex_cli:
   resume_strategy: none
   environment: {}
   redacted_env_keys: [API_KEY, AUTH_TOKEN, TOKEN, COOKIE, PASSWORD, SECRET]
+
+# ---------------------------------------------------------------------------
+# Codex 接自备端点：为什么这一档不在这里给
+# ---------------------------------------------------------------------------
+# `codex` 有 provider 层（`model_provider = "<id>"` + `[model_providers.<id>]`
+# 的 base_url / env_key / wire_api，也能用 `codex exec -c 'model_providers.x={…}'`
+# 逐次覆盖，不必改那份文件），但它**只认 wire_api="responses"**：
+# 本机在 0.162.0-alpha.2 与 0.159.2 上实测，写成 "chat" / "chat_completions"
+# 一律 `config could not be loaded`。GLM 与 DeepSeek 常用的是 Chat Completions
+# 形状（/v1/chat/completions、/api/paas/v4），那些端点接不进 codex —— 这不是
+# 参数没找对，是那个 CLI 不讲这个协议。所以这里不放 codex 的第三方档：
+# 要接，先确认对方提供 OpenAI Responses 形状的路径，再按上面那段自己加档。
+# 这一条在本页面上也照样说出来，不藏着。
+# ---------------------------------------------------------------------------
 
 codex_supervisor:
   extends: base_codex_cli
@@ -101,3 +181,98 @@ codex_executor:
   supports_file_write: true
   supports_shell: true
   supports_git: true
+
+# ---------------------------------------------------------------------------
+# 第三家、第四家：这些档是按**各家自己文档里的非交互调用**写的，不是照着
+# codex/claude 那两段抄的形状。区分清楚两件事：
+#   · 参数存在吗 —— OpenCode 那一档在本机 `opencode-cli.exe --help`（v2.0.20）
+#     实测过 `run` / stdin 投喂 / `--auto`；Gemini / Qwen 那两档来自官方 headless
+#     文档（`-p` 与 stdin 都支持，`--model` 选模型）。
+#   · 端到端跑过吗 —— **没有**。这一层不假装"测过了"：MAO 没有实测过这些 CLI 的
+#     **只读**开关，所以这里**只给执行档**，不给 supervisor/reviewer 档 ——
+#     "验收 agent 不许改文件"这一条在那些 CLI 上还没有可证的参数（OpenCode 的
+#     `--auto` 是"自动批准未被显式拒绝的权限"，不是只读；deny 规则住在
+#     `opencode.jsonc` 里，不在命令行上）。要当验收用，得先实测出一个真的只读开关。
+# 命令一律 `${NAME_CLI_PATH}`：路径不写死在本文件里，由发现层判
+# （显式路径 → `${NAME_CLI_PATH}` → PATH → 平台已知安装位置）。
+# ---------------------------------------------------------------------------
+
+opencode_executor:
+  description: "OpenCode 执行档：run + stdin 投喂，--auto 自动批准（本机 v2.0.20 --help 实测）"
+  command: "${OPENCODE_CLI_PATH}"
+  prompt_mode: stdin
+  working_directory_mode: workspace
+  output_mode: stdout
+  # -m 是本机实测出来的那一个免费模型：`opencode run --auto -m opencode/big-pickle`
+  # 真的写出了文件（rc=0），而同形状换 `opencode/exo-free` 是
+  # `Error from provider (Console): Upstream request failed: Endpoint is unavailable.`
+  # （rc=1）。这一档不写 -m 就会跟着 CLI 的默认值走，而那个默认值今天在这台
+  # 机器上是坏的那一条 —— 所以写死，并写上为什么。
+  extra_args: ["run", "--auto", "-m", "opencode/big-pickle"]
+  # 会话续接：`--session <id>` 是**本机实测**过的续接形状 —— 同一个 id 带着它问"上一轮的暗号"，答出 BANANA-42；不带 -s 的新会话则明说"每个会话都是全新开始的"。
+  # 声明这一位之后，框架会把 session id 存进 state.json 的 active_* 里，于是崩溃续跑 / 新一轮尝试也回到同一个对话。
+  supports_session_resume: true
+  resume_strategy: argument
+  resume_argument: "--session"
+  # 会话 id 的**来源**（本机实测）：自选 id 会被 OpenCode 拒（`at ["sessionID"]`），
+  # 而它自己的 `session list` 第一行第一列就是刚创建的那个会话（时间倒序）。
+  # 这一档不调用模型，只问一次 CLI 自己 —— 取回来的 id 才算 provider 发过的。
+  session_lookup_args: ["session", "list"]
+  session_id_pattern: "(ses_[A-Za-z0-9]{8,})"
+  allowed_exit_codes: [0]
+  timeout_seconds: 900
+  supports_cli: true
+  # supports_json_output 这一格**不写**（默认 true）：三个角色的 adapter 都要求
+  # supports_structured_output（`mao/agents/generic_cli.py` 的 required 清单），
+  # 声明 false 的角色连 preflight 都过不去 —— 这是本轮实测出来的。
+  # 但这里**不用** CLI 的 json 旗标：opencode 的 --format json 与 gemini 的
+  # --output-format json 交回的是信封，框架的抽取器不解信封（上面 codex/claude
+  # 那两条 ★ 就是这条教训）。结构化靠 prompt 约束 + 从文本里抽。
+  supports_file_write: true
+  supports_shell: true
+  supports_git: true
+  resume_strategy: none
+  environment: {}
+  redacted_env_keys: [API_KEY, AUTH_TOKEN, TOKEN, COOKIE, PASSWORD, SECRET]
+
+gemini_executor:
+  description: "Gemini CLI 执行档：官方 headless 文档的 -p / stdin 形状；本机未实跑"
+  command: "${GEMINI_CLI_PATH}"
+  prompt_mode: stdin
+  working_directory_mode: workspace
+  output_mode: stdout
+  # --approval-mode auto_edit：编辑类操作自动过，其余仍需批准（文档里给的档）
+  extra_args: ["-p", "--approval-mode", "auto_edit"]
+  allowed_exit_codes: [0]
+  timeout_seconds: 900
+  supports_cli: true
+  # supports_json_output 这一格**不写**（默认 true）：三个角色的 adapter 都要求
+  # supports_structured_output（`mao/agents/generic_cli.py` 的 required 清单），
+  # 声明 false 的角色连 preflight 都过不去 —— 这是本轮实测出来的。
+  # 但这里**不用** CLI 的 json 旗标：opencode 的 --format json 与 gemini 的
+  # --output-format json 交回的是信封，框架的抽取器不解信封（上面 codex/claude
+  # 那两条 ★ 就是这条教训）。结构化靠 prompt 约束 + 从文本里抽。
+  supports_file_write: true
+  supports_shell: true
+  supports_git: true
+  resume_strategy: none
+  environment: {}
+  redacted_env_keys: [API_KEY, AUTH_TOKEN, TOKEN, COOKIE, PASSWORD, SECRET]
+
+qwen_executor:
+  description: "Qwen Code 执行档：官方 headless 文档的 -p / stdin 形状；本机未实跑"
+  command: "${QWEN_CLI_PATH}"
+  prompt_mode: stdin
+  working_directory_mode: workspace
+  output_mode: stdout
+  extra_args: ["-p", "--approval-mode", "auto-edit"]
+  allowed_exit_codes: [0]
+  timeout_seconds: 900
+  supports_cli: true
+  supports_json_output: true       # 文档明写 --output-format text/json/stream-json
+  supports_file_write: true
+  supports_shell: true
+  supports_git: true
+  resume_strategy: none
+  environment: {}
+  redacted_env_keys: [API_KEY, AUTH_TOKEN, TOKEN, COOKIE, PASSWORD, SECRET]

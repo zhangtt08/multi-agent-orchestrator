@@ -83,3 +83,25 @@ launcher.log
 /.env
 /.env.*
 !.env.example
+/.venv3/
+# 双击入口是生成物，源在 tools/entry_batches.py（和 make_desktop_app.py 的外壳同一条规矩）：
+# cmd.exe 要 CRLF+GBK，而本仓库的行尾策略是 eol=lf，两者正面冲突，所以不提交产物。
+/第一次装这个.bat
+/开始使用.bat
+/不花钱先看一遍.bat
+# 桌面外壳的生成物（源在 desktop/：main.rs、make_icon.py、两个 ps1）
+/desktop/node_modules/
+/desktop/.cache/
+/desktop/src-tauri/target/
+/desktop/src-tauri/icons/
+/dist-desktop/
+# 顶层那个双击入口：由 desktop/build_portable.ps1 生成（exe 不能单独拷到根，
+# 它在 exe 自己那一侧找 app\ 与 runtime\），指的就是上面那一份。
+/MAO-Workbench.lnk
+/runtime_desktop/
+/desktop/build-bin/
+/desktop/target-gnu/
+/desktop/src-tauri/gen/
+
+.acb/
+

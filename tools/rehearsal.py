@@ -36,6 +36,28 @@ def workspace_dir() -> Path:
     return Path(tempfile.gettempdir()) / WORKSPACE_NAME / "ws"
 
 
+def stage_dir() -> Path:
+    """这一次彩排落在哪一格：上一次用完的那一格让出去，另开一格。
+
+    判据是 `.git/HEAD`（地雷 5 —— `.git` 在不在不算），不是"目录在不在"：
+    按过『建仓库并开工』之后那一格就成了仓库，而假 agent 每一批写的是**同一份
+    固定内容**，于是第二次按下去必然 `changes.patch 0 行`，证据闸门（正确地）
+    拒绝合入，人看到的却是"我按了第二次，软件说未确认"
+    （2026-10-08 连着按两次真实复现：m1 failed / 批次判定 未确认）。
+    免费那一档是业主第一个按的东西，第二次按就得到一个假故障 —— 这一格必须换。
+
+    上一批的目录一个字都不动：它自己的 `DELIVERY.md` 与现场还指得到它
+    （地雷 22 那句"重跑会覆盖现场"在这里不适用，因为我们不覆盖，只另开）。
+    """
+    first = workspace_dir()
+    stage = 1
+    while True:
+        candidate = first if stage == 1 else first.parent / f"ws-{stage}"
+        if not (candidate / ".git" / "HEAD").exists():
+            return candidate
+        stage += 1
+
+
 def ensure(root: Path | str = ".", base: str =
            "archive/config-history/config_p10_offline/settings.yaml",
            workspace: str | Path | None = None) -> dict:
@@ -46,11 +68,12 @@ def ensure(root: Path | str = ".", base: str =
     （第一次就撞在这上面）。改的键与 `tools/unattended_e2e.build_config` 同一批。
 
     `workspace` 只给测试用：演练目录在本机是**有状态**的（按过那颗按钮之后它就成了
-    git 仓库），拿它做判据的用例因此会随上一次现场变红或变绿。
+    git 仓库），拿它做判据的用例因此会随上一次现场变红或变绿 —— 所以注入点给的是
+    **整格路径**，不经过 `stage_dir()` 的换格逻辑。
     """
     root = Path(root).resolve()
     cfg = root / CONFIG_DIR
-    ws = Path(workspace) if workspace else workspace_dir()
+    ws = Path(workspace) if workspace else stage_dir()
     rt = root / "runtime_rehearsal"
     cfg.mkdir(parents=True, exist_ok=True)
     ws.mkdir(parents=True, exist_ok=True)      # 故意**不是** git 仓库：按钮要能演到

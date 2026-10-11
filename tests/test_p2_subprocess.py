@@ -282,7 +282,7 @@ def test_fake_cli_broken_output_modes_are_rejected(mode):
 def test_transport_send_invocation_returns_process_result():
     transport = SubprocessTransport(dry_run=False)
     result = transport.send_invocation(
-        invocation([sys.executable, "-c", "print('{}')"]),
+        invocation(probe("--stdout", "{}")),
     )
     assert result.exit_code == 0
     assert "{}" in result.stdout
@@ -292,9 +292,7 @@ def test_transport_send_invocation_returns_process_result():
 def test_transport_stdin_mode_actually_pipes_the_prompt():
     transport = SubprocessTransport(dry_run=False)
     result = transport.send_invocation(
-        invocation([sys.executable, "-c",
-                    "import sys; sys.stdout.write(sys.stdin.read().upper())"],
-                   stdin="hello"),
+        invocation(probe("--echo-stdin"), stdin="hello"),
     )
     assert "HELLO" in result.stdout
     transport.close()
@@ -304,7 +302,7 @@ def test_transport_marks_timeout_and_does_not_hang():
     """§27：超时必须杀掉子进程 —— 否则整个 Orchestrator 会被挂死。"""
     transport = SubprocessTransport(dry_run=False)
     result = transport.send_invocation(
-        invocation([sys.executable, "-c", "import time; time.sleep(30)"], timeout=0.7),
+        invocation(probe("--sleep", "30"), timeout=0.7),
     )
     assert result.timed_out is True
     assert result.duration_ms < 15000
@@ -336,7 +334,7 @@ def test_run_once_missing_binary_is_a_result_not_an_exception():
 def test_transport_does_not_treat_nonzero_exit_as_success():
     transport = SubprocessTransport(dry_run=False)
     result = transport.send_invocation(
-        invocation([sys.executable, "-c", "raise SystemExit(1)"]),
+        invocation(probe("--exit", "1")),
     )
     assert result.exit_code == 1
     assert result.succeeded() is False
@@ -385,7 +383,7 @@ def test_transport_can_be_reused_for_multiple_calls():
     transport = SubprocessTransport(dry_run=False)
     for _ in range(3):
         result = transport.send_invocation(
-            invocation([sys.executable, "-c", "print('ok')"]),
+            invocation(probe("--stdout", "ok")),
         )
         assert result.exit_code == 0
     transport.close()

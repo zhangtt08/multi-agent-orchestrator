@@ -131,6 +131,52 @@ def tail_message(proc: subprocess.CompletedProcess) -> str:
     return ((proc.stderr or proc.stdout or "").strip().splitlines() or [""])[-1][:160]
 
 
+#: `login` 是唯一一条**本机前提**而不是发布物缺陷的 FAIL（地雷 35）。
+#: 它让 doctor 与 bootstrap 非零退出是对的（业主 2026-09-30 就是被这句挡住），
+#: 但它不该让"这份发布物对不对"的检查变红。
+LOGIN_ITEM = "login"
+
+
+def health_failures(items) -> list:
+    """体检里 FAIL 的那几格（doctor 与 bootstrap 都按同一份结论决定退出码）。
+
+    状态字按 **env_report 自己那一份** 比，不按本文件里恰好同名的 `FAIL` ——
+    两个模块各自写一个 "FAIL" 字符串，改一个就静默不守卫了。
+    """
+    from tools.env_report import FAIL as R_FAIL
+
+    return [i for i in items if i.status == R_FAIL]
+
+
+def blocking_failures(failures) -> list:
+    """除本机前提之外的 FAIL —— 只有这些才是发布物的缺陷。"""
+    return [i for i in failures if i.name != LOGIN_ITEM]
+
+
+def command_label(argv, root=None) -> str:
+    """报红的那一行必须说得出是哪条命令。
+
+    单文件脚本（`tools/bootstrap.py`）的 argv 只有一个元素，按"去掉 argv[0]"
+    拼 label 会得到空字符串，现场就是一条"`: 退出码 1，期望 0`"——
+    读的人不知道红的是哪一格（地雷 44）。
+    """
+    root = str(root or ROOT)
+    parts = [str(a).replace(root + os.sep, "") for a in list(argv)[1:]]
+    return " ".join(parts) or os.path.basename(str(list(argv)[0]))
+
+
+def expected_health_rc(failures) -> int:
+    """doctor / bootstrap **应当**回的退出码：任何 FAIL 都 1，登录那一格也不例外。
+
+    以前这一档期望写的是"除 login 之外有没有 FAIL"，而 doctor 自己按
+    "任何 FAIL 都 1" 退出 —— 两台机器之间登录态一变，检查就从全绿变成
+    "CLI 阻塞"，红的原因还看不出来（2026-10-08 实测：codex 退出登录后
+    报的最后一行是 embedding worker 那句 WARN）。判据与它要解释的那一格
+    必须同源，否则就是一条没人能读懂的墙。
+    """
+    return 1 if failures else 0
+
+
 def check_config(py: str) -> Check:
     c = Check("Config")
     for name in ("config", "archive/config-history/config_offline", "examples/config_minimal"):
@@ -150,20 +196,19 @@ def check_config(py: str) -> Check:
             c.fail(f"{name}: 加载失败 —— {tail_message(out)}")
         else:
             c.note(f"{name}: {out.stdout.strip()}")
-    # 生产配置必须能过体检，并且体检里没有 FAIL
-    from tools.env_report import FAIL as R_FAIL
+    # 生产配置必须能过体检，并且体检里没有**发布物**层面的 FAIL
     from tools.env_report import collect
 
     report = collect("config", create_runtime=True)
-    for item in report.items:
-        if item.status == R_FAIL and item.name != "login":
-            c.fail(f"生产配置体检 FAIL: {item.group}/{item.name}: {item.detail}")
-        elif item.status == R_FAIL:
-            # `login` 是唯一一条**本机前提**而不是发布物缺陷的 FAIL：CLI 没登录
-            # 必须让 doctor 喊出来（业主 2026-09-30 就是被这件事挡住了，而软件
-            # 一句没说），但它不该让"这份东西对不对"的检查变红。
-            c.note("  login FAIL = 这台机器的 agent CLI 没登录，不是发布物的缺陷。"
-                   "真跑之前先照那条结论里的命令登录一次。")
+    failures = health_failures(report.items)
+    for item in blocking_failures(failures):
+        c.fail(f"生产配置体检 FAIL: {item.group}/{item.name}: {item.detail}")
+    if len(failures) > len(blocking_failures(failures)):
+        # 同一条例外只写在 blocking_failures() 里，这里只负责把它说出来 ——
+        # 原来这里另有一份 `item.name != "login"`，同一个判断两处各写一遍
+        # 就是这次 CLI 转红查不下去的起点。
+        c.note("  login FAIL = 这台机器的 agent CLI 没登录，不是发布物的缺陷。"
+               "真跑之前先照那条结论里的命令登录一次。")
     counts = [f"{sum(1 for i in report.items if i.status == s)} {s}"
               for s in ("OK", WARN, FAIL)]
     c.note("doctor 分组体检（config/）: " + ", ".join(counts))
@@ -177,11 +222,14 @@ def check_cli(py: str) -> Check:
     main = str(ROOT / "main.py")
     # doctor 允许的非零退出码只有一个来源：这台机器的 agent CLI 没登录
     # （与 check_configs 里那条例外同源）。除 login 之外的 FAIL 必须让它回 0。
-    from tools.env_report import FAIL as R_FAIL
     from tools.env_report import collect as _collect
 
-    doc_rc = 0 if not [i for i in _collect("config", create_runtime=False).items
-                       if i.status == R_FAIL and i.name != "login"] else 1
+    failures = health_failures(_collect("config", create_runtime=False).items)
+    for item in blocking_failures(failures):
+        c.fail(f"生产配置体检里有非登录的 FAIL："
+               f"{item.group}/{item.name}: {item.detail}")
+    doc_rc = expected_health_rc(failures)
+    why_nonzero = "、".join(f"{i.group}/{i.name}" for i in failures) or "无"
     invocations = [
         ([main, "--version"], 0), ([main, "--help"], 0),
         ([main, "doctor"], doc_rc), ([main, "doctor", "--doctor-json"], doc_rc),
@@ -191,7 +239,11 @@ def check_cli(py: str) -> Check:
         ([main, "scheduler", "--help"], 0), ([main, "scheduler", "status"], 0),
         ([main, "checkpoint", "--help"], 0), ([main, "memory", "--help"], 0),
         ([main, "memory", "list"], 0),
-        ([str(ROOT / "tools" / "bootstrap.py")], 0),
+        # tools/bootstrap.py 与 doctor 同一条退出规则：任何 FAIL 都回 1，
+        # 登录那一格也不例外 —— 它是给业主看的"你还没登录，先登录"，
+        # 那一句必须真的喊得出来。所以这一档的期望退出码跟着体检算，
+        # 不是写死的 0（写死就等于把本机前提报成发布物缺陷）。
+        ([str(ROOT / "tools" / "bootstrap.py")], doc_rc),
         ([str(ROOT / "tools" / "smoke_test.py"), "--help"], 0),
         ([str(ROOT / "tools" / "smoke_real_harness.py"), "--dry-run"], 0),
         ([str(ROOT / "tools" / "setup_embeddings.py"), "--check"], 0),
@@ -207,17 +259,27 @@ def check_cli(py: str) -> Check:
             c.fail(f"{' '.join(argv)}: 超时")
             continue
         text = (out.stdout or "") + (out.stderr or "")
-        label = " ".join(a.replace(str(ROOT) + os.sep, "") for a in argv[1:])
+        # 单文件脚本的 argv 只有一个元素，label 于是是空的 —— 报红时那一行
+        # 就成了"：退出码 1，期望 0"，读的人不知道是哪条命令红的。
+        label = command_label(argv)
         if "Traceback (most recent call last)" in text:
             c.fail(f"{label} 抛栈 —— 预期错误必须是人话")
             c.note("  " + " | ".join(_tail(text, 3)))
             continue
         if out.returncode != expected_rc:
             c.fail(f"{label}: 退出码 {out.returncode}，期望 {expected_rc}")
-            c.note("  " + " | ".join(_tail(text, 2)))
-        elif expected_rc != 0 and not (
-                "error" in text.lower() or "未找到" in text
-                or "reject" in text.lower()):
+            if label.startswith(("doctor", "bootstrap")):
+                # 体检的结论在它自己的输出里，不在 stderr 的最后一行 ——
+                # 那里坐着的是 embedding worker 那句 WARN，读的人会去装 torch，
+                # 而真正的那一格是 login（地雷 44：判据要说得出差在哪）。
+                c.note(f"  体检里 FAIL 的那几格：{why_nonzero}")
+            else:
+                c.note("  " + " | ".join(_tail(text, 2)))
+        elif expected_rc != 0 and not label.startswith(("doctor", "bootstrap")) \
+                and not ("error" in text.lower() or "未找到" in text
+                         or "reject" in text.lower()):
+            # doctor / bootstrap 的非零退出是**报告本身**（"这一格 FAIL，去做那一句"），
+            # 不是"用户按错了要人话"那一类 —— 那一类才需要 error/未找到/reject。
             c.warn(f"{label}: 非零退出但没有可读说明")
     return c
 

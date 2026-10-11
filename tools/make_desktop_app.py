@@ -205,7 +205,7 @@ def bat(pydir: str, mock: bool) -> str:
         "  pause",
         "  exit /b 1",
         ")",
-        'if not exist "%~dp0app\\tools\\workbench.py" (',
+        'if not exist "%~dp0app\\tools\\app.py" (',
         "  echo [MAO] app folder is missing next to this batch file.",
         "  echo [MAO] Re-run tools/make_desktop_app.py to rebuild it.",
         "  pause",
@@ -223,7 +223,8 @@ def bat(pydir: str, mock: bool) -> str:
 def _logo_px(x: float, y: float, size: float):
     """把 LOGO_SVG 的三个节点与三条线在**连续坐标**（0..24）上算颜色。
 
-    图形的唯一来源是 `workbench_ui.LOGO_SVG` —— 这里按同一组圆心/半径/颜色重画，
+    图形的原始那一份在 `archive/old-ui/workbench_ui.py`（LOGO_SVG，页面已退役）——
+    这里按同一组圆心/半径/颜色重画，
     是因为 .ico 需要位图；两处一旦分叉，桌面图标和侧栏就不是一个东西了，
     所以圆心与颜色写成模块常量并由测试与 SVG 对齐。
     """
@@ -361,7 +362,7 @@ def readme(ref: str, sha: str, version: str, dest: Path, n_files: int,
 这是什么
     双击 start-mao.bat（真实档）或 start-mao-mock.bat（零配额演示），
     会弹出一个没有地址栏的应用窗口。它就是本仓库的本地工作台
-    （tools/workbench.py 那套页面）用浏览器应用模式打开的样子 —— 不是另外
+    （tools/app.py 那一页）用浏览器应用模式打开的样子 —— 不是另外
     写的一套图形界面。这个窗口本身不花额度；花额度的是窗口里那颗『开始』
     （它会调用一次真实的验收 agent 去切分）。关掉窗口 = 退出程序，排队的任务也会跟着停。
 

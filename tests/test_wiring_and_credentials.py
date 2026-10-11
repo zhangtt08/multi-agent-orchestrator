@@ -19,6 +19,27 @@ from tools import role_wiring as rw      # noqa: E402
 REPO = Path(__file__).resolve().parents[1]
 
 
+class _FakeRunner:
+    """`tools/app.py` 要的调度器替身。
+
+    `running` 必须是**方法**（地雷 6、30）：写成布尔属性或 property，页面拿到的是
+    bound method、恒真，于是"调度器在跑"这句话从此没有判据。
+    """
+
+    def __init__(self) -> None:
+        self._up = False
+
+    @property
+    def log_path(self) -> Path:
+        return REPO / "runtime_workbench" / "scheduler.log"
+
+    def running(self) -> bool:
+        return self._up
+
+    def tail(self, lines: int = 40):
+        return []
+
+
 @pytest.fixture()
 def sandbox(tmp_path, monkeypatch):
     """一份 config 的副本 + 干净的进程环境，别把真仓库的 agents.yaml 改了。"""
@@ -70,11 +91,36 @@ class TestLocalEnv:
             encoding="utf-8")
         assert "OPENAI_API_KEY" not in os.environ
 
-    def test_dotenv_is_not_committable(self):
-        # 这一格的全部意义建立在"密钥不进版本库"上：gitignore 规则没了就是事故
-        r = subprocess.run(["git", "check-ignore", "-q", ".env"], cwd=REPO,
-                           capture_output=True)
-        assert r.returncode == 0
+    def test_dotenv_is_not_committable(self, tmp_path):
+        # 这一格的全部意义建立在"密钥不进版本库"上：gitignore 规则没了就是事故。
+        # 判据不靠"这份工作树恰好是个 git 仓库"（地雷 38、46：跨机器搬运会把 .git
+        # 整个剥掉，于是这条会红得与 .gitignore 无关）。现场自己造：把**仓库里那一份
+        # .gitignore** 放进一个临时仓库，再问 git「.env 被忽略了吗」。
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        shutil.copy(REPO / ".gitignore", repo / ".gitignore")
+        (repo / ".env").write_text("ANY_KEY=secret\n", encoding="utf-8")
+        (repo / ".env.example").write_text("ANY_KEY=\n", encoding="utf-8")
+        blank = tmp_path / "no-git-config"
+        blank.write_text("", encoding="utf-8")
+        # 全局与系统 gitignore 指到空文件：让"被忽略"这件事只能由仓库自己那份规则解释
+        # （同地雷 47 把 GIT_CONFIG_* 隔离成唯一变量的那条）。
+        env = dict(os.environ, GIT_CONFIG_GLOBAL=str(blank),
+                   GIT_CONFIG_SYSTEM=str(blank))
+
+        def run(*args):
+            try:
+                return subprocess.run(["git", *args], cwd=str(repo), env=env,
+                                      capture_output=True, text=True,
+                                      encoding="utf-8", errors="replace")
+            except OSError as exc:               # 没有 git 的机器：说得出为什么证明不了
+                pytest.fail(f"这一格要问 git「.env 被忽略了没有」，可这台机器上"
+                            f"起不了 git（{type(exc).__name__}）—— 无法证明，不是放行")
+
+        init = run("init", "-q", ".")
+        assert init.returncode == 0, init.stderr
+        assert run("check-ignore", "-q", ".env").returncode == 0,             ".env 没被 gitignore 挡住 = 密钥会进版本库"
+        assert run("check-ignore", "-q", ".env.example").returncode != 0,             "样例档被一起挡了 = 装好的桌面版里没人知道有哪些键"
 
 
 class TestRoleWiring:
@@ -118,27 +164,39 @@ class TestRoleWiring:
 
 
 class TestSuggestedKeysAreReal:
-    """界面上列出的每个键，都必须真的被代码或配置读一次。
+    """交给人的那份键清单，每个键都必须真的被代码或配置读一次。
+
+    清单就是 `local_env.SUGGESTED`（`.env.example` 与旧的凭据格都从它出）；
+    一页版删掉的是**那一格输入框**，不是这份清单的效力 —— 人照样按它填 .env。
 
     这条测试的由来是我自己犯的错：凭据格一开始列了 `ANTHROPIC_API_KEY` 与
     `OPENAI_API_KEY`，而这个程序**一次都没读过**它们 —— 额度来自 CLI 登录态。
     列一个不读的键比不列更糟：那会让人以为填了就生效。
     """
 
+    #: 只数**会发出去的那一份代码**：archive/（旧界面与历史配置档）、runtime*/、
+    #: .venv*、memory/、workspaces/、dist/、docs/ 都不算 —— 一个键被一份不再发布的
+    #: 东西"读"了，等于没人读（同地雷 38 那句"要改的是让测试自己造它依赖的现场"，
+    #: 这里依赖的是"哪些文件算本体"，判据就得写死在本体那一份清单上）。
+    SHIPPED_FILES = ("main.py", "pyproject.toml", "pytest.ini")
+    SHIPPED_DIRS = ("mao", "tools", "config", "examples", "prompts")
+    SHIPPED_SUFFIXES = (".py", ".yaml", ".yml", ".toml", ".ini")
+
     def _read_keys(self):
         import re
-        import subprocess
 
-        tracked = subprocess.run(["git", "ls-files"], cwd=REPO,
-                                 capture_output=True, text=True).stdout.split()
         blob = []
-        for p in tracked:
-            if not p.endswith((".py", ".yaml", ".yml", ".toml", ".ini")):
-                continue
-            f = REPO / p
-            if not f.is_file():
-                continue
-            blob.append(f.read_text(encoding="utf-8", errors="replace"))
+        for rel in self.SHIPPED_FILES:
+            f = REPO / rel
+            if f.is_file():
+                blob.append(f.read_text(encoding="utf-8", errors="replace"))
+        for rel in self.SHIPPED_DIRS:
+            for f in sorted((REPO / rel).rglob("*")):
+                if not f.is_file() or f.suffix not in self.SHIPPED_SUFFIXES:
+                    continue
+                if "__pycache__" in f.parts:
+                    continue
+                blob.append(f.read_text(encoding="utf-8", errors="replace"))
         text = "\n".join(blob)
         found = set(re.findall(
             r'environ(?:\.get)?[\[\(]\s*["\']([A-Z][A-Z0-9_]{2,})'
@@ -153,7 +211,7 @@ class TestSuggestedKeysAreReal:
         read = self._read_keys()
         missing = [k for k, _ in le.SUGGESTED
                    if k not in read and k not in le.EXTERNAL_CONSUMED]
-        assert not missing, f"界面上列了但没人读的键：{missing}"
+        assert not missing, f"清单里列了、本体却没人读的键：{missing}"
 
     def test_external_consumed_keys_are_documented_and_few(self):
         """第三方库读的键要单独列、单独说明，不能混在"我们的键"里。"""
@@ -166,11 +224,50 @@ class TestSuggestedKeysAreReal:
         assert "ANTHROPIC_API_KEY" not in names
         assert "OPENAI_API_KEY" not in names
 
-    def test_the_panel_says_where_the_quota_actually_comes_from(self):
-        import sys
-        sys.path.insert(0, str(REPO / "tests"))
-        from tools import workbench_ui as ui
-        from test_workbench_ui import FakeCtx
-        page = ui.settings(FakeCtx(real_roles=True))
-        assert "这个程序不用 API key" in page
-        assert "CLI 的登录态" in page
+    def test_the_page_says_where_the_quota_actually_comes_from(self, tmp_path,
+                                                               monkeypatch):
+        """那一页要答对两件事：这个程序不用 API key；额度来自 CLI 自己的登录态。
+
+        原来打的是 `workbench_ui.settings` 里的凭据格 —— 那一格随旧界面一起删了
+        （一页版没有 .env 编辑器，`test_workbench_ui.py` 也搬进 archive/old-ui-tests/，
+        那个 `FakeCtx` 替身不再存在）。判据本身没变，搬到还活着的那一屏：
+        『调用哪个 agent』那一格必须说"这个软件自己不存任何 key"、必须把每个角色
+        能不能用交给**本机零调用探测**说出来、并给出一条只有本人能跑的登录命令；
+        页面上不许再长出"填 key"的输入格。
+        旧格里"值只显示长度与末四位、明文不进页面源码"那一半在这页上没有对应物 ——
+        那条判据继续由 `test_the_plaintext_never_comes_back_out` 锁着，没有作废。
+        """
+        import json
+
+        from tools import app as A
+
+        cfg = tmp_path / "cfg"
+        cfg.mkdir()
+        shutil.copy(REPO / "examples" / "config_minimal" / "settings.yaml",
+                    cfg / "settings.yaml")
+        cli = tmp_path / "cli"
+        cli.mkdir()
+        # ASCII + CRLF 的 .cmd，替真 codex 说话（中文 .bat 在这台机器上按 GBK 解码）。
+        # 文件名必须就叫 codex.cmd —— 探测层按可执行文件名查本地状态子命令。
+        (cli / "codex.cmd").write_bytes(
+            b"@echo off\r\necho Not logged in\r\nexit /b 1\r\n")
+        (cfg / "harness.yaml").write_text(json.dumps({
+            "stub_codex": {"command": str(cli / "codex.cmd").replace("\\", "/"),
+                           "prompt_mode": "stdin", "supports_cli": True}},
+            indent=2), encoding="utf-8")
+        (cfg / "agents.yaml").write_text(
+            "".join(f"{role}:\n  provider: generic_cli\n  transport: subprocess\n"
+                    f"  harness_profile: stub_codex\n"
+                    for role in ("supervisor", "executor", "reviewer")),
+            encoding="utf-8")
+
+        monkeypatch.setattr(A, "ROOT", tmp_path)
+        monkeypatch.setattr(A, "desktop_dir", lambda: tmp_path)
+        # config_dir 传绝对路径：`load_config` 按进程 cwd 解析相对路径（地雷 36）
+        app = A.App(config_dir=str(cfg), runner=_FakeRunner(), real_roles=True)
+        page = A.page(app)
+        assert "不存任何 key" in page,             "旧句「这个程序不用 API key」的等价说法；没了就是让人去填一个不生效的键"
+        assert "<input type='password'" not in page,             "这一页不存密钥 —— 出现一个填 key 的框就是第二个凭据入口"
+        assert "没登录" in page and "codex login" in page,             "额度那一头真正要动的地方是 CLI 的登录态，要说出命令"
+        assert "只能你本人做" in page,             "这一步程序替不了，必须点名由谁做（地雷 35：做不了的才留给人）"
+        assert "会消耗订阅额度" in page

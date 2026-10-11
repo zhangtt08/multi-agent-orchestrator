@@ -39,11 +39,29 @@ class WorkspaceStrategy(str, Enum):
 
 
 # §20：COPY 默认排除清单（绝不复制数 GB 环境目录）
+#
+# 这一条在 2026-10-09 失守过一次，代价是磁盘上凭空多出来的 3.5 GB：
+# 一条 `queue submit` 没带 `--workspace`（地雷 19 那条：空路径解析成进程 cwd =
+# 仓库根），COPY 于是把**整个仓库**抄进 `runtime/example/runtime_workspaces/rt-…/`，
+# 里面连 `.venv-ml`（1.47 GB 的 torch）都抄了 —— 清单里有 `.venv`，
+# 但那是**手列的名字**，`.venv-ml` 不在列上就整份进去了。
+# 所以这一版按**形状**（fnmatch 通配）写，而不是再往上补一个名字：
+# 补名字就是下一个漂移。
+#
+# 已知取舍：`runtime*` 会把被复制项目里**自己**叫 runtime/ 的目录一起挡掉。
+# 这一条不是新决定 —— 旧清单里的 `runtime` 早就这么做了（§20 的原意是
+# "运行期目录不进副本"：副本是给 agent 干活用的，不需要上一批的证据目录，
+# 而地雷 22 说过那些证据只有一份，抄一份出来只会变成第二份互相矛盾的现场）。
 COPY_DEFAULT_EXCLUDES = (
-    ".git", ".pytest_cache", "__pycache__",
-    "runtime", "runtime_p7", "runtime_p8", "runtime_p9",
-    "runtime_scheduler", "runtime_worktrees", "runtime_workspaces",
-    "memory", "node_modules", ".venv", "venv", "envs",
+    ".git", ".hg", ".svn",
+    "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".cache",
+    "node_modules",
+    ".venv*", "venv*", "envs",          # 虚拟环境：形状覆盖，别再数名字
+    "runtime*",                          # 本框架与项目的运行期目录（含 *_batch/_scratch）
+    "target-*", "target", "build-bin",   # 构建产物（cargo 的 gnu/msvc 两条路都在这）
+    "dist-desktop",                      # 交付包本身是生成物
+    "memory",
+    ".acb",
 )
 
 

@@ -123,26 +123,49 @@ class TestThePanelRunsIt:
         assert not made["workspace"].lower().startswith(
             str(ROOT).lower()), "演练目录在仓库里面就会被仓库闸门挡住"
 
-    def test_the_tasks_page_says_it_is_a_rehearsal_not_a_cost(self, made):
-        from types import SimpleNamespace
+    def test_the_page_says_it_is_a_rehearsal_not_a_cost(self, made, tmp_path,
+                                                        monkeypatch):
+        """彩排档那一页要说两件事：**不花钱**，以及**产出是固定剧本**。
 
-        import tools.workbench_ui as ui
-        ctx = SimpleNamespace(config_dir=made["config_dir"], real_roles=True,
-                              default_strategy="GIT_WORKTREE", last_form={},
-                              last_go={}, go_init_hint={},
-                              runner=_runner(made["config_dir"]),
-                              forced_workspace=made["workspace"])
-        page = ui.tasks(ctx)
-        assert "彩排档" in page and "一分钱额度都不花" in page
-        assert "不会按你这句话做" in page,             "彩排档演的是**路**，不是业主的内容；不写清就会让人以为假 agent 做了他那句话"
+        原来打的是 `workbench_ui.tasks`（那一页已删，界面只剩 `tools/app.py` 这一页）。
+        判据一条没松，只是搬到还活着的那一格里：
+        ① 免费那一档要明说不花订阅额度（不写清业主就不敢按）；
+        ② 要明说内容是固定剧本 —— 彩排档演的是**路**，不是业主的内容，
+           不写清就会让人以为假 agent 做了他那句话（地雷 50 的那条推论）。
+        """
+        from tools import app as A
+
+        # 这一页读 runtime_batch 与默认落地目录：夹具自己造现场（地雷 38）
+        monkeypatch.setattr(A, "ROOT", tmp_path)
+        monkeypatch.setattr(A, "desktop_dir", lambda: tmp_path)
+        app = A.App(config_dir=made["config_dir"],
+                    runner=_runner(made["config_dir"]),
+                    real_roles=True, rehearsal=True)
+        app.wb.forced_workspace = made["workspace"]
+        strip = A.agent_strip(app)
+        page = A.page(app)
+        assert strip in page,             "彩排档那一格要真的在那一页上，不是只活在函数里"
+        assert "彩排档" in page and "不消耗任何订阅额度" in page
+        # 这一句讲的是**边界**而不是措辞：彩排档演的是**路**（拆目标 → 干活 →
+        # 判定 → 合入），不是业主那句话会被切成什么。所以判据收在"这一格里
+        # 同时出现固定与剧本"，改字不改边界都得过；把这一格删掉或改成
+        # "按你的目标切分"就红。（2026-10-08 文案减负那一轮就是按字面
+        # "固定的剧本"红的 —— 页面当时说的是"产出内容是固定剧本"。）
+        assert "固定" in strip and "剧本" in strip,                 \
+            "彩排档演的是**路**，不是业主的内容"
+        # 「这一档不花钱」与「这一档花钱」不许在同一格里各说一遍。
+        # 整页级的那一条现在只能收在这一格上：`go_form` 的成本标签只看 real_roles，
+        # 而彩排档三个角色都是 generic_cli + 本机 python（supports_cli 为真），
+        # 于是同一页顶上写"不消耗任何订阅额度"、下面写"会消耗订阅额度"。
+        # 那是页面的缺陷，已单独上报，不在测试里替它抹平；修好后这条要收紧回 page 级。
+        assert "会消耗订阅额度" not in strip
         assert "真实档那一下会花额度" not in page
-        assert "绝不该被碰" not in page
+        assert "绝不该被碰" not in page,             "演练档不许把业主真实项目当成落地目录 —— 假 agent 写的是固定内容，落进去就是污染"
 
     def test_a_plain_panel_still_says_the_cost(self, tmp_path, monkeypatch):
-        from types import SimpleNamespace
+        """没开 --rehearsal 的那一档不许自称在彩排，而真实档要把代价说出来。"""
+        from tools import app as A
 
-        import tools.delivery_view as dv
-        import tools.workbench_ui as ui
         cfg = tmp_path / "config"
         cfg.mkdir()
         (cfg / "settings.yaml").write_text(
@@ -152,25 +175,37 @@ class TestThePanelRunsIt:
         (cfg / "agents.yaml").write_text(
             "supervisor:\n  provider: mock_supervisor\n", encoding="utf-8")
         (cfg / "harness.yaml").write_text("# 空\n", encoding="utf-8")
-        monkeypatch.setattr(ui, "ROOTISH", tmp_path)
-        monkeypatch.setattr(dv, "ROOT", tmp_path)
-        ctx = SimpleNamespace(config_dir=str(cfg), real_roles=False,
-                              default_strategy="COPY", last_form={}, last_go={},
-                              go_init_hint={}, runner=_runner(str(cfg)),
-                              forced_workspace="")
-        page = ui.tasks(ctx)
+        monkeypatch.setattr(A, "ROOT", tmp_path)
+        monkeypatch.setattr(A, "desktop_dir", lambda: tmp_path)
+        # config_dir 传**绝对路径**：`load_config` 按进程 cwd 解析相对路径（地雷 36）
+        app = A.App(config_dir=str(cfg), runner=_runner(str(cfg)),
+                    real_roles=True)
+        page = A.page(app)
         assert "彩排档" not in page            # 没开 --rehearsal 就不许自称在彩排
         assert "mao-rehearsal" not in page
+        assert "固定的剧本" not in page
+        assert "会消耗订阅额度" in page,             "花钱的那一档要写明花额度 —— 与上一条一起成立，成本这一格才算有判据"
 
 
 class TestTheFreeShortcutPointsAtIt:
-    def test_the_launcher_passes_the_rehearsal_flag(self, tmp_path):
+    def test_the_launcher_passes_the_tier_that_actually_exists(self, tmp_path):
+        """两颗免费按钮各自的档：`--rehearsal` 与零配额最小档，都不再传 `--mock`。
+
+        入口换了：一页版是 `tools/app.py`，而它的 argparse 里**没有** `--mock` 这个
+        开关 —— 外壳再传一次就是双击打开一个连网页都没有的窗口（地雷 26 同形）。
+        免费那一档演彩排（要能走到 DELIVERY.md），`--mock` 那一档指的是
+        `examples/config_minimal`（内置 Mock 角色，零配额，答不出项目档）。
+        """
         from tools import desktop_launcher as dl
 
         cmd = dl.workbench_cmd(True, tmp_path, 8765, True)
         assert "--rehearsal" in cmd and "--mock" not in cmd
         assert "--port" in cmd
-        assert dl.workbench_cmd(True, tmp_path, 8765, False)[-1] == "--mock"
+        assert Path(cmd[1]).name == "app.py",             "起的是那一页，不是已经不带网页的 workbench.py"
+        mock_cmd = dl.workbench_cmd(True, tmp_path, 8765, False)
+        assert mock_cmd[-2:] == ["--config-dir", "examples/config_minimal"]
+        assert "--mock" not in mock_cmd
+        assert (ROOT / "examples" / "config_minimal").is_dir(),             "那一档指的是真存在的配置目录，不是一个被搬走的位置"
 
     def test_the_generated_batch_file_describes_what_it_now_does(self):
         from tools.make_desktop_app import bat
@@ -178,3 +213,62 @@ class TestTheFreeShortcutPointsAtIt:
         text = bat("C:\\py", mock=True)
         assert "rehearsal" in text.lower() and "no subscription quota" in text
         assert text.isascii(), ".bat 含中文会被 cmd 按 GBK 解码成别的命令"
+
+
+# ===========================================================================
+# 第二次按『开工』不该得到一个假故障（2026-10-08 实测）
+# ===========================================================================
+class TestEachPressGetsItsOwnStage:
+    """彩排档是业主第一个按的东西：连按两次就报"未确认"，讲的是软件自己。
+
+    机制：假 agent 每一批写的是**同一份固定内容**，而第一跑之后那一格已经
+    是仓库且文件就在里面 —— 第二跑的 `changes.patch` 必然 0 行，证据闸门
+    按设计拒绝，人读到的却是"我的东西没做成"。
+    """
+
+    def test_a_stage_that_became_a_repo_is_never_reused(self, tmp_path,
+                                                        monkeypatch):
+        first = tmp_path / "mao-rehearsal" / "ws"
+        monkeypatch.setattr(rh, "workspace_dir", lambda: first)
+        assert rh.stage_dir() == first
+
+        (first / ".git").mkdir(parents=True)
+        (first / ".git" / "HEAD").write_text("ref: refs/heads/main\n",
+                                             encoding="utf-8")
+        assert rh.stage_dir() == tmp_path / "mao-rehearsal" / "ws-2"
+
+    def test_a_broken_dot_git_is_not_a_used_stage(self, tmp_path, monkeypatch):
+        """判据是 `.git/HEAD`（地雷 5），不是"`.git` 在不在"。
+
+        只有 objects/ 没有 HEAD 的空 `.git` 不算仓库 —— 把这种目录判成
+        "上一次用完了"会白开新的一格，而真正的现场其实还能接着演。
+        """
+        first = tmp_path / "mao-rehearsal" / "ws"
+        (first / ".git" / "objects").mkdir(parents=True)
+        monkeypatch.setattr(rh, "workspace_dir", lambda: first)
+        assert rh.stage_dir() == first
+
+    def test_moving_to_a_new_stage_does_not_touch_the_previous_one(self,
+                                                                   tmp_path,
+                                                                   monkeypatch):
+        """换格不是清理：上一批的交付物留在原地，它自己的 DELIVERY.md 还指得到它。"""
+        first = tmp_path / "mao-rehearsal" / "ws"
+        first.mkdir(parents=True)
+        (first / "说明.md").write_text("上一批写的\n", encoding="utf-8")
+        (first / ".git").mkdir()
+        (first / ".git" / "HEAD").write_text("ref: refs/heads/main\n",
+                                             encoding="utf-8")
+
+        monkeypatch.setattr(rh, "workspace_dir", lambda: first)
+        second = rh.stage_dir()
+        assert second == tmp_path / "mao-rehearsal" / "ws-2"
+        assert (first / "说明.md").read_text(encoding="utf-8") == "上一批写的\n"
+
+    def test_the_injected_workspace_still_bypasses_the_stage_pick(self, tmp_path,
+                                                                 monkeypatch):
+        """夹具注入的是整格路径 —— 换格逻辑不许把测试的现场挪走（地雷 40）。"""
+        monkeypatch.setattr(rh, "workspace_dir",
+                            lambda: tmp_path / "should-not-be-used")
+        forced = tmp_path / "given"
+        made = rh.ensure(ROOT, workspace=forced)
+        assert Path(made["workspace"]) == forced.resolve()

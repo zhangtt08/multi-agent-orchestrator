@@ -237,10 +237,21 @@ class WorkspaceStrategyManager:
         if exec_path.exists():
             raise WorkspacePreparationError(
                 f"复制目标已存在：{exec_path}", kind="TRANSIENT")
+        # 先量一下**没抄的那些**并说出来。2026-10-09 那次磁盘被吃满，
+        # 事后看日志只有一句 strategy=copy source=.，没人看得出 1.4 GB 的
+        # 虚拟环境到底进没进去（判据要说得出差在哪一格，地雷 44）。
+        from .strategies import COPY_DEFAULT_EXCLUDES as _EXC
+        import fnmatch
+
+        skipped = [p.name for p in source.iterdir()
+                   if any(fnmatch.fnmatch(p.name, g) for g in _EXC)]
         shutil.copytree(
             source, exec_path,
             ignore=shutil.ignore_patterns(*COPY_DEFAULT_EXCLUDES),
             dirs_exist_ok=False)
+        self._emit("WORKSPACE_COPY_EXCLUDED",
+                   detail=f"source={source} 没抄 {len(skipped)} 个顶层目录："
+                          + ("、".join(sorted(skipped)[:12]) or "（没有匹配项）"))
         plan = WorkspacePlan(
             strategy=strategy, source_workspace_path=str(source),
             execution_workspace_path=str(exec_path),

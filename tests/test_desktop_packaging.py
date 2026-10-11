@@ -423,7 +423,13 @@ class TestDesktopLauncherLayout:
         from tools import desktop_launcher as dl
         cmd = dl.workbench_cmd(False, tmp_path, 8790)
         assert "--port" in cmd and cmd[cmd.index("--port") + 1] == "8790"
-        assert dl.workbench_cmd(True, tmp_path, 8790)[-1] == "--mock"
+        # 那一档现在开的是**那一页**（tools/app.py），不是已经不带网页的 workbench.py。
+        assert Path(cmd[1]).name == "app.py", cmd
+        # `--mock` 那一档指的是零配额最小配置，不再传 `--mock`：一页版的 argparse 里
+        # 没有这个开关，外壳再传一次就是双击打开一个起不来的窗口（地雷 26 同形）。
+        assert dl.workbench_cmd(True, tmp_path, 8790)[-2:] == \
+            ["--config-dir", "examples/config_minimal"]
+        assert "--mock" not in dl.workbench_cmd(True, tmp_path, 8790)
         seen = {}
 
         def fake_popen(argv, **kw):

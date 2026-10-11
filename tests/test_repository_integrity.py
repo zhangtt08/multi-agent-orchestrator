@@ -536,6 +536,28 @@ class TestLineEndingPolicy:
             "工作树里出现 CRLF 的受跟踪文件（%d 个），会与索引里的 LF 形成"
             "指纹/hash 漂移：%s" % (len(bad), ", ".join(bad[:8])))
 
+    def test_powershell_scripts_with_non_ascii_carry_a_bom(self):
+        """Windows PowerShell 5.1 把无 BOM 的 UTF-8 按 GBK 解 —— 中文注释会吃掉换行。
+
+        实测踩过：`desktop/build_shell.ps1` 里一段中文注释之后，
+        `$ico = Join-Path $src ...` 被并进了注释行，于是 `$ico` 是 null，
+        脚本死在 `Test-Path : 无法将参数绑定到参数 Path，因为该参数是空值`，
+        而这句话看起来像脚本逻辑坏了，实际是**编码**问题。
+        规矩：.ps1 要么全 ASCII，要么带 UTF-8 BOM —— 二选一，别靠运气。
+        """
+        root = Path(__file__).resolve().parents[1]
+        offenders = []
+        for p in sorted(root.rglob("*.ps1")):
+            parts = set(p.relative_to(root).parts)
+            if parts & {".venv", ".venv3", "archive", "dist-desktop", "target"}:
+                continue
+            data = p.read_bytes()
+            if any(b > 127 for b in data) and not data.startswith(b"\xef\xbb\xbf"):
+                offenders.append(str(p.relative_to(root)).replace("\\", "/"))
+        assert not offenders, (
+            "这些 .ps1 含非 ASCII 却没有 UTF-8 BOM（PS 5.1 会按 GBK 解，注释会吞掉"
+            "下一行）：%s" % ", ".join(offenders))
+
     def test_index_stores_lf_for_every_text_file(self):
         bad = [name for name, index, _wt in self._eol_rows()
                if index not in ("i/lf", "i/none", "i/-text")]

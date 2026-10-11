@@ -63,6 +63,33 @@ KNOWN_INSTALL_GLOBS = {
         os.path.join("%LOCALAPPDATA%", "Goose", "bin", "goose.exe"),
         "~/.local/bin/goose",
     ),
+    # 下面几条是 2026-10-08 为"不能只限定于 claude code 与 codex"补的。每一条都有
+    # 出处：opencode 那一条是**本机实测**到的位置（@opencodedesktop 的桌面装包里
+    # 带着 opencode-cli.exe，`--version` 回 v2.0.20）；qwen / kimi 走的是与 claude
+    # 同一套 npm shim 位置；zcode 那一条来自 ZCode 官方 README 写的安装位置
+    # （`~/.local/bin`）。命中不了就按未命中处理 —— 这些是兜底，不是"猜它在哪"。
+    "opencode": (
+        os.path.join("%LOCALAPPDATA%", "Programs", "@opencodedesktop",
+                     "resources", "opencode-cli.exe"),
+        os.path.join("%LOCALAPPDATA%", "Programs", "@opencodedesktop",
+                     "resources", "opencode.exe"),
+        os.path.join("%APPDATA%", "npm", "opencode.cmd"),
+        "~/.opencode/bin/opencode",
+        "/usr/local/bin/opencode",
+    ),
+    "qwen": (
+        os.path.join("%APPDATA%", "npm", "qwen.cmd"),
+        "~/.local/bin/qwen",
+        "/usr/local/bin/qwen",
+    ),
+    "kimi": (
+        os.path.join("%APPDATA%", "npm", "kimi.cmd"),
+        "~/.local/bin/kimi",
+    ),
+    "zcode": (
+        "~/.local/bin/zcode",
+        os.path.join("%LOCALAPPDATA%", "Programs", "ZCode", "zcode.exe"),
+    ),
 }
 
 #: Windows 上 PATHEXT 让 "codex" 命中 "codex.cmd"；glob 模板不带后缀，
@@ -285,8 +312,21 @@ def interpreter_scripts_dir() -> str:
     用绝对路径起解释器时（桌面版、门禁脚本、`C:\\...\\mao-venv\\Scripts\\python.exe`）
     它不在 —— 于是被切出来的验收命令 `pytest -q` 根本起不来
     （实测：WinError 2，状态里记成 `acceptance_exit: null`，地雷 10 说的就是这一族）。
+
+    两种布局都要算对，因为桌面版交付用的是后者：
+    - 激活的 venv：`…\\.venv\\Scripts\\python.exe`，脚本与 exe 同目录；
+    - **可移植的整份解释器**：`…\\runtime\\python.exe`，脚本落在
+      `…\\runtime\\Scripts\\`（`python -m venv` 之外的一份完整安装就是这样）。
+      只回 `Path(sys.executable).parent` 在这种布局下给的是 `runtime\\`，
+      那里没有 pytest.exe —— 于是验收命令又会记成"没跑成"（同一个症状，换个现场）。
     """
-    return str(Path(sys.executable).parent)
+    parent = Path(sys.executable).parent
+    for cand in (parent / "Scripts", parent / "bin"):
+        # 只认"这一层真有 Scripts/bin"，不猜更深的路径；venv 那一档两者都不存在，
+        # 于是原样返回 parent，行为与改之前完全一致。
+        if cand.is_dir():
+            return str(cand)
+    return str(parent)
 
 
 def framework_command_env(overrides: Optional[dict] = None) -> dict:

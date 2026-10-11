@@ -88,8 +88,11 @@ def workbench_cmd(mock: bool, root: Path, port: int = PORT,
     于是免费那一档只能"按单任务入队"，永远到不了 DELIVERY.md ——
     业主说的"还是偏 demo"有一半指这个。`--mock` 本身留在 CLI 里没删。
     """
-    tier = ["--rehearsal"] if rehearsal else (["--mock"] if mock else [])
-    return [sys.executable, str(root / "tools" / "workbench.py"),
+    tier = (["--rehearsal"] if rehearsal else
+            ["--config-dir", "examples/config_minimal"] if mock else [])
+    #: 入口换了：一页版是 `tools/app.py`，`tools/workbench.py` 现在只是那一层
+    #: 判据函数（切分前提、推进器、租约），不再自己起网页。
+    return [sys.executable, str(root / "tools" / "app.py"),
             "--port", str(port)] + tier
 
 

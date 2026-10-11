@@ -183,9 +183,10 @@ def panel_mode(cfg_dir: str) -> int:
     推进器由面板起。2026-09-30 那四堵"怎么填都不行"的墙，没有一堵在 `--one` 里
     看得见。零配额：三个角色都是真子进程（fake_cli_agent + 会写文件的那层壳）。
     """
+    from tools import app as appmod
     from tools import batch_project as bp
+    from tools import delivery_view as dv
     from tools import workbench as wb
-    from tools import workbench_flow as flow
     from tools.scheduler_cli import SchedulerRunner
 
     # 上一次的同名状态会让 drive() 以为"这一格已经判过了"，就地停下 ——
@@ -259,9 +260,14 @@ def panel_mode(cfg_dir: str) -> int:
     after = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(ws),
                            capture_output=True, text=True).stdout.strip()
     first_rt = str((ms.get("m1") or {}).get("runtime_task_id") or "")
-    facts = flow.collect(first_rt, cfg_dir) if first_rt else {}
-    both_agents = bool((facts.get("calls") or {})) and len(
-        {c.get("role") for c in (facts.get("calls") or [])}) >= 2
+    # 这一条判据改成读**业主实际看到的那一页**：两个 agent 的往返要在页面上露面，
+    # 而不是只存在于台账里。数字的来源是框架自己写的 agent_calls.jsonl。
+    page_app = appmod.build_app(cfg_dir)
+    page_app.project = str(spec_path or "")
+    page_html = appmod.page(page_app)
+    both_agents = ("执行 agent 干活 ×" in page_html
+                   and "验收 agent 拆目标 ×" in page_html
+                   and bool(first_rt))
     delivery_text = (delivery.read_text(encoding="utf-8")
                      if delivery.is_file() else "")
     # 第二格**注定**合不进去，而且这是演练装置的性质不是缺陷：那个假执行者每次都
@@ -283,7 +289,7 @@ def panel_mode(cfg_dir: str) -> int:
         "没有差异的那一格被诚实判失败，并把原因写进交付说明（不问人）":
             stopped_honestly,
         "交付说明 DELIVERY.md 写了": delivery.is_file(),
-        "工作流页看得见两个 agent 的往返": both_agents,
+        "这一页看得见两个 agent 的往返": both_agents,
     }
     print("=== 判定（面板那一步开始）===")
     for label, ok in checks.items():

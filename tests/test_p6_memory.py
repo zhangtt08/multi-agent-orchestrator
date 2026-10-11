@@ -32,7 +32,7 @@ from mao.memory.models import (  # noqa: E402
     EvidenceLevel, MemoryCandidate, MemoryEntry,
 )
 from mao.memory.retriever import (  # noqa: E402
-    MemoryCompactor, MemoryInjector, MemoryRetriever,
+    MemoryCompactor, MemoryInjector, MemoryRetriever, RetrievedMemory,
 )
 from mao.memory.store import SQLiteMemoryStore  # noqa: E402
 from mao.memory.validator import MemoryValidator as MV  # noqa: E402
@@ -364,6 +364,78 @@ class TestInjector:
         text = MemoryInjector.HEADER
         assert "current task" in text.lower()
         assert "precedence" in text.lower()
+
+
+# ===========================================================================
+# 省 token（2026-10-08 实测）：注入段不许把本轮简报再抄一遍
+# ===========================================================================
+_BRIEF = ("这一格要在项目根创建一份《使用说明.md》，里面分别说明怎么装、"
+          "怎么双击打开、怎么在网页里填一句话开工，验收命令是 pytest -q，"
+          "任何一节都不许省略。")
+
+
+def _rm(entry) -> RetrievedMemory:
+    return RetrievedMemory(entry=entry, score=1.0, matched_reasons=["t"])
+
+
+class TestInjectionBudget:
+    def test_an_entry_that_only_restates_this_round_is_dropped(self):
+        """实测：拆目标那一轮的注入段 1978 字，里面每条都是上一轮简报的副本。"""
+        entry = _entry(summary=_BRIEF)
+        text = MemoryInjector().render([_rm(entry)], current_prompt=_BRIEF)
+        assert text == ""
+
+    def test_an_entry_saying_something_else_still_gets_through(self):
+        """放宽不等于关掉 —— 真正带来新信息的记忆必须还在。"""
+        entry = _entry()
+        text = MemoryInjector().render([_rm(entry)], current_prompt=_BRIEF)
+        assert entry.memory_id in text
+        assert "VerificationRunner" in text
+
+    def test_dedup_is_off_when_the_caller_gives_no_current_prompt(self):
+        """没传 current_prompt 的调用方（layer.context_for）行为不变。"""
+        entry = _entry(summary=_BRIEF)
+        text = MemoryInjector().render([_rm(entry)])
+        assert entry.memory_id in text
+
+    def test_a_long_entry_is_clipped_without_losing_its_provenance(self):
+        entry = _entry(summary=("框架验证证据由 VerificationRunner 记录，"
+                                "执行者自述不参与验收判定。") * 20)
+        line = entry.injection_line()
+        assert len(line) > MemoryInjector.PER_LINE_CAP
+        text = MemoryInjector().render([_rm(entry)])
+        body = [l for l in text.split("\n") if l.startswith("- ")]
+        assert len(body) == 1
+        assert entry.memory_id in body[0]      # §20：来源标记不能被截掉
+        assert len(body[0]) - 2 <= MemoryInjector.PER_LINE_CAP
+
+    def test_the_section_cannot_become_a_second_brief(self):
+        entries = [_entry(memory_id=f"MEM-{i:04d}",
+                          summary=(f"第 {i} 课：跨进程恢复要读持久化的检查点，"
+                                   f"不要读内存字段，新进程里它天生为空。") * 6)
+                   for i in range(9)]
+        text, ids = MemoryInjector().render_details(
+            [_rm(x) for x in entries])
+        body = [l for l in text.split("\n") if l.startswith("- ")]
+        assert 0 < len(ids) < len(entries)
+        assert sum(len(l) for l in body) <= (
+            MemoryInjector.TOTAL_CAP + 2 * len(body))
+        assert len(text) < 1978   # 实测那一段的字数量级，封顶必须比它小
+
+    def test_reported_ids_are_exactly_the_ones_in_the_text(self):
+        """溯源一致性：调用方按这个列表记 memory_ids_used 与 mark_used。
+
+        被封顶丢掉的条目若仍被记成"注入过"，那是框架记录在说谎
+        （地雷 45 的同一形状），并且会把它的使用计数白涨一档。
+        """
+        entries = [_entry(memory_id=f"MEM-{i:04d}",
+                          summary=(f"第 {i} 课：跨进程恢复要读持久化的检查点，"
+                                   f"不要读内存字段。") * 8)
+                   for i in range(7)]
+        text, ids = MemoryInjector().render_details([_rm(x) for x in entries])
+        for entry in entries:
+            in_text = f"- [{entry.memory_id}]" in text
+            assert in_text == (entry.memory_id in ids), entry.memory_id
 
 
 # ===========================================================================

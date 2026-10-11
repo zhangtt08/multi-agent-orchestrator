@@ -76,6 +76,13 @@ def redact_env(env: Dict[str, str], redacted_keys: Sequence[str] | None = None
     return out
 
 
+_BARE_REF = re.compile(r"^\s*\$\{([A-Za-z_][A-Za-z0-9_]*)\}\s*$")
+def _bare_ref(value):
+    """整个值就是一个 ${VAR} 引用时返回 VAR，否则返回空串。"""
+    m = _BARE_REF.match(str(value or ""))
+    return m.group(1) if m else ""
+
+
 class CommandBuilder:
     """Profile + Request -> CommandInvocation。
 
@@ -201,8 +208,20 @@ class CommandBuilder:
             env.update({str(k): str(v) for k, v in os.environ.items()})
         env.update({str(k): str(v) for k, v in self._base_env.items()})
         # 展开 Profile 里的 ${VAR} 引用，便于把宿主环境变量映射给 Harness
+        #
+        # ★ 一条引用没设上时**不写这个键**，而不是写成空串。空串会盖掉宿主里
+        #   已有的同名变量（地雷 52 ③ 记的就是这一条）：`claude` 读的是
+        #   `process.env.ANTHROPIC_BASE_URL || 默认端点`，空串是"有值"，
+        #   于是那台机器上本来能用的端点（cc-switch 配好的）被 MAO 一句话擦掉 ——
+        #   业主按『开工』没动静的机制就在这里。真要清空某一格的人写的是字面量
+        #   `KEY: ""`，那一条照旧生效（下面只跳过"整值就是一个未设置的引用"）。
         for key, value in profile.environment.items():
-            env[str(key)] = self._expand(value, env)
+            expanded = self._expand(value, env)
+            name = _bare_ref(value)
+            if name and not expanded and not os.environ.get(name) \
+                    and not self._base_env.get(name):
+                continue      # 引用没设上：不写这个键，别把宿主已有的值擦掉
+            env[str(key)] = str(expanded)
         return env
 
     @staticmethod

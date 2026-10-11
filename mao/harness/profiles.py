@@ -66,6 +66,32 @@ def has_unresolved_placeholder(value: Optional[str]) -> bool:
     return bool(value and _PLACEHOLDER_RE.search(value))
 
 
+def referenced_env_vars(profile: "HarnessProfile") -> Dict[str, str]:
+    """这个档引用了哪几个宿主变量 → 它们各自喂给 CLI 的哪一个位置。
+
+    为什么放在这一层：档自己最知道它的 `${VAR}` 写在哪。界面要告诉人的是
+    "选了这一档，本机就得有这几个变量"，而人在配置里加一个档时不该再维护
+    第二份变量清单 —— 那份清单一旦和 profile 里的 `${}` 不同步，就是
+    "填了却不生效"那一类缺陷。
+
+    返回形如 `{"command": ["CODEX_CLI_PATH"], "environment.ANTHROPIC_BASE_URL": ["MAO_X"]}`。
+    """
+    out: Dict[str, str] = {}
+    names = []
+    for field in ("command", "fixed_working_directory", "prompt_file_dir",
+                  "output_file", "prompt_argument", "system_prompt_argument",
+                  "resume_argument", "session_id_pattern"):
+        for var in _PLACEHOLDER_RE.findall(str(getattr(profile, field, "") or "")):
+            if var not in names:
+                names.append(var)
+    for var in names:
+        out[var] = "command"
+    for key, value in (profile.environment or {}).items():
+        for var in _PLACEHOLDER_RE.findall(str(value or "")):
+            out[var] = f"environment.{key}"
+    return out
+
+
 class _ProfileModel(BaseModel):
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
 
@@ -157,6 +183,12 @@ class HarnessProfile(_ProfileModel):
     # 描述"怎么把 session id 喂回去"。第二阶段只建模，不接真实产品参数。
     resume_strategy: Optional[str] = None
     resume_argument: Optional[str] = None
+    # 会话 id 的**来源**：`session_lookup_args` 是一次不调用模型的子命令
+    # （例如 `opencode session list`），`session_id_pattern` 的第 1 组就是
+    # provider 给的会话 id。没有这两样，框架就不许续接 —— 见
+    # `AgentSession.provider_issued` 那条注释里的事故。
+    session_lookup_args: List[str] = Field(default_factory=list)
+    session_id_pattern: Optional[str] = None
 
     # ---- System prompt 投递（第四阶段 §16）----
     # 承载 system prompt 的参数名，例如 "--append-system-prompt"。

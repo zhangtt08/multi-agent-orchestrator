@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from .models import (ROLE_MEMORY_TYPES, MemoryConfidence, MemoryEntry,
                      MemoryScope, MemoryStatus, normalize_lesson)
@@ -175,14 +175,75 @@ class MemoryInjector:
         "precedence over anything below.\n"
     )
 
-    def render(self, memories: List[RetrievedMemory]) -> str:
-        if not memories:
-            return ""
-        lines = [self.HEADER]
+    #: 一次注入的封顶。实测（2026-10-08，彩排档一次跑的 prompt 落盘）：
+    #: 拆目标那一轮的注入段 1978 字，里面每条都把"上一轮那个格子的简报"整段抄了一遍
+    #: —— 与本轮任务几乎逐字相同，只花额度不给信息。
+    PER_LINE_CAP = 260
+    TOTAL_CAP = 900
+
+    @classmethod
+    def _norm(cls, text: str) -> str:
+        return "".join(re.findall(r"[a-z0-9一-鿿]+", (text or "").lower()))
+
+    @classmethod
+    def _restates(cls, line: str, current_prompt: str) -> bool:
+        """这一条只是在重述本轮的任务吗（三元组重合度）。"""
+        if not current_prompt:
+            return False
+        a, b = cls._norm(line), cls._norm(current_prompt)
+        if len(a) < 40:
+            return False
+        grams = {a[i:i + 3] for i in range(len(a) - 2)}
+        seen = {b[i:i + 3] for i in range(len(b) - 2)}
+        return len(grams & seen) / max(1, len(grams)) >= 0.55
+
+    @classmethod
+    def _clip(cls, line: str) -> str:
+        """从中间截，**开头的 [MEM-id][kind] 一定留着** —— 来源标记不可丢（§20）。"""
+        if len(line) <= cls.PER_LINE_CAP:
+            return line
+        head, tail = line[:120], line[-(cls.PER_LINE_CAP - 130):]
+        return head + "…（略）…" + tail
+
+    def render(self, memories: List[RetrievedMemory], *,
+               current_prompt: str = "") -> str:
+        return self.render_details(memories, current_prompt=current_prompt)[0]
+
+    def render_details(self, memories: List[RetrievedMemory], *,
+                       current_prompt: str = "") -> Tuple[str, List[str]]:
+        """渲染注入段：先丢重述本轮的条目，再逐条封顶，最后整段封顶。
+
+        返回 (段文本, **真正出现在文本里的** memory_id)。第二个返回值不是装饰：
+        调用方的溯源（`memory_ids_used` / MEMORY_INJECTED）必须与送出去的那一份
+        一致，否则被封顶丢掉的条目会被记成"注入过"—— 那是 §20 溯源说谎，
+        与地雷 45「判据要问框架自己那一份记录」是同一条。
+
+        省的是**重复**，不是判据：记忆段本来就标明 advisory、当前任务优先
+        （见 HEADER），而且它不参与验收 —— 验收证据来自框架采集，不来自这里。
+        存储里的记忆原文一个字不动，截断只发生在送出去的那一份上。
+        """
+        kept: List[Tuple[str, str]] = []
         for item in memories:
-            lines.append(f"- {item.entry.injection_line()}")
-        lines.append("")
-        return "\n".join(lines)
+            line = str(item.entry.injection_line())
+            # 重合度按 **summary** 算，不按整行算：行首的 [MEM-id][kind][scope]
+            # 与行尾的 (source: …) 是来源标记，约 55 字符，拿它参与比例会把
+            # "整段抄了本轮简报" 的条目压到 0.7 —— 判据该量内容，不该量包装。
+            if self._restates(str(item.entry.summary), current_prompt):
+                continue
+            kept.append((item.entry.memory_id, self._clip(line)))
+        if not kept:
+            return "", []
+        total = len(self.HEADER)
+        used: List[Tuple[str, str]] = []
+        for memory_id, line in kept:
+            if total + len(line) > self.TOTAL_CAP:
+                break
+            used.append((memory_id, line))
+            total += len(line)
+        if not used:
+            used = [kept[0]]
+        lines = [self.HEADER] + [f"- {l}" for _, l in used] + [""]
+        return "\n".join(lines), [m for m, _ in used]
 
 
 class MemoryCompactor:

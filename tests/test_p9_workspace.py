@@ -41,6 +41,64 @@ def source_repo(tmp_path: Path) -> Path:
     return repo
 
 
+class TestCopySkipsMachineState:
+    """COPY 只抄**项目**，不抄这台机器的状态。
+
+    2026-10-09 实测：一条没带 `--workspace` 的提交（地雷 19：空路径 = 进程 cwd =
+    仓库根）把整个仓库抄进执行工作区，连 `.venv-ml`（1.47 GB 的 torch）都在里面。
+    旧清单**有** `.venv`，但那是手列的名字 —— 换个名字就漏，所以这一版按形状配。
+    """
+
+    def _source(self, tmp_path: Path) -> Path:
+        src = tmp_path / "proj"
+        (src / "src").mkdir(parents=True)
+        (src / "src" / "app.py").write_text("print('hi')\n", encoding="utf-8")
+        (src / "README.md").write_text("# 项目本体\n", encoding="utf-8")
+        big = src / ".venv-ml" / "Lib" / "site-packages" / "torch" / "lib"
+        big.mkdir(parents=True)
+        (big / "torch_cpu.dll").write_bytes(b"\0" * 4096)
+        for noise in (".venv/Scripts", "node_modules/pkg", "target-gnu/debug",
+                      "runtime_batch/x", ".cache/mingw64", "__pycache__"):
+            (src / noise).mkdir(parents=True)
+        return src
+
+    def test_environment_and_build_dirs_never_enter_the_copy(self, tmp_path):
+        src = self._source(tmp_path)
+        mgr = WorkspaceStrategyManager(worktree_root=tmp_path / "worktrees")
+        plan = mgr.prepare(runtime_task_id="rt-copy", source_path=src,
+                           strategy=WorkspaceStrategy.COPY, now_iso="now")
+        dest = Path(plan.execution_workspace_path)
+        assert (dest / "src" / "app.py").is_file(),             "项目自己的源码必须照抄"
+        assert (dest / "README.md").is_file()
+        for gone in (".venv-ml", ".venv", "node_modules", "target-gnu",
+                     "runtime_batch", ".cache", "__pycache__"):
+            assert not (dest / gone).exists(), f"{gone} 被抄进执行工作区了"
+
+    def test_a_new_venv_variant_is_covered_by_shape_not_by_name(self, tmp_path):
+        """新增一档 `.venv-embedding` 不该再要求回来补一个名字。"""
+        src = self._source(tmp_path)
+        (src / ".venv-embedding" / "Lib").mkdir(parents=True)
+        mgr = WorkspaceStrategyManager(worktree_root=tmp_path / "worktrees")
+        dest = Path(mgr.prepare(runtime_task_id="rt-copy2", source_path=src,
+                                strategy=WorkspaceStrategy.COPY,
+                                now_iso="now").execution_workspace_path)
+        assert not (dest / ".venv-embedding").exists()
+
+    def test_the_copy_says_what_it_left_out(self, tmp_path):
+        """跳过哪些目录必须能查得到 —— 只写 "strategy=copy source=." 的话，
+        事后没人看得出那 1.4 GB 到底进没进去（地雷 44）。"""
+        seen = []
+        src = self._source(tmp_path)
+        mgr = WorkspaceStrategyManager(worktree_root=tmp_path / "worktrees",
+                                       emit=lambda kind, detail="": seen.append(
+                                           (kind, detail)))
+        mgr.prepare(runtime_task_id="rt-copy3", source_path=src,
+                    strategy=WorkspaceStrategy.COPY, now_iso="now")
+        skips = [d for k, d in seen if k == "WORKSPACE_COPY_EXCLUDED"]
+        assert skips, "抄完什么都不说 —— 省下来的空间没人看得见"
+        assert ".venv-ml" in skips[0]
+
+
 @pytest.fixture()
 def manager(tmp_path: Path) -> WorkspaceStrategyManager:
     return WorkspaceStrategyManager(worktree_root=tmp_path / "worktrees")

@@ -354,7 +354,10 @@ def test_policy_wildcard_allowed_commands():
                                allowed_commands=["python", "npm"]),
     })
     enforcer = PolicyEnforcer(policy)
-    enforcer.check_command(Role.EXECUTOR, ["python", "-c", "1"])
+    # 命令形状换成"脚本文件"：`python -c` 那一类内联代码在 v1.9.18 起被默认政策
+    # 按形状拦（那条判据自己由 test_policy_execution_boundary.py 锁）。这一格测的
+    # 是 allowed_commands 的前缀放行与拦下，跟内联与否无关。
+    enforcer.check_command(Role.EXECUTOR, ["python", "run.py"])
     with pytest.raises(PolicyViolationError):
         enforcer.check_command(Role.EXECUTOR, ["curl", "http://x"])
 

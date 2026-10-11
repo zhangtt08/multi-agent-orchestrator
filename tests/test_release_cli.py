@@ -409,3 +409,66 @@ class TestBoardCellSemantics:
             "旧机器路径被截掉了头，看不出来自哪台机器"
         assert page.count("（不在本机）") == 1
         assert "…trator" not in page
+
+
+# ===========================================================================
+# 门禁自己那一格：doctor 的退出码与"什么算发布物缺陷"必须同源
+# ===========================================================================
+class TestHealthTolerance:
+    """2026-10-08 实测的那一条：CLI 一退出登录，`release_check` 的 CLI 步就红，
+
+    而它报的最后一行是 embedding worker 那句 WARN —— 读的人被带去装 torch，
+    真正的那一格是 login。根因是门禁里"允许的 FAIL"与 doctor 自己的
+    退出规则各写一遍且不一致（地雷 35 与 44 的同一形状）。
+    """
+
+    @staticmethod
+    def _item(name, status="FAIL", group="CLI Harnesses"):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(name=name, status=status, group=group,
+                               detail="本机前提，不是发布物缺陷")
+
+    def test_login_alone_is_not_a_release_defect(self):
+        from tools.release_check import blocking_failures, health_failures
+
+        failures = health_failures([self._item("login"),
+                                    self._item("python", "OK")])
+        assert blocking_failures(failures) == []
+
+    def test_login_alone_still_makes_the_health_tools_exit_nonzero(self):
+        """容忍的是"别把它算成缺陷"，不是"假装工具回了 0"。
+
+        doctor 必须照旧非零 —— 业主 2026-09-30 被登录态挡住而软件一句没说，
+        那一句就是这一格存在的理由。
+        """
+        from tools.release_check import expected_health_rc, health_failures
+
+        assert expected_health_rc(health_failures([self._item("login")])) == 1
+
+    def test_any_other_fail_is_a_release_defect(self):
+        from tools.release_check import blocking_failures, health_failures
+
+        failures = health_failures([self._item("login"),
+                                    self._item("memory db")])
+        assert [i.name for i in blocking_failures(failures)] == ["memory db"]
+
+    def test_nothing_can_be_blocked_while_the_gate_expects_zero(self):
+        """门禁的期望退出码与"哪些算缺陷"不许再各说一套。"""
+        from tools.release_check import (blocking_failures, expected_health_rc,
+                                         health_failures)
+
+        for items in ([], [self._item("login")], [self._item("dep numpy")],
+                      [self._item("login"), self._item("memory db")]):
+            failures = health_failures(items)
+            assert expected_health_rc(failures) == (0 if not failures else 1)
+            if blocking_failures(failures):
+                assert expected_health_rc(failures) == 1
+
+    def test_a_bare_script_path_is_still_named_when_it_goes_red(self):
+        """`tools/bootstrap.py` 只有一个 argv 元素，label 不能是空的。"""
+        from tools.release_check import command_label
+
+        assert command_label([r"C:\x\tools\bootstrap.py"],
+                             root=r"C:\x") == "bootstrap.py"
+        assert command_label(["main.py", "doctor"], root="C:/x") == "doctor"

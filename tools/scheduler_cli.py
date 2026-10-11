@@ -398,7 +398,7 @@ _EMPTY_QUEUE_HINT = (
 def _list(args, config, config_dir: str = "config") -> int:
     # 先问库在不在，再决定连不连 —— TaskRepository 一连就把空库建出来，
     # 于是"这条队列从没跑过"与"跑过但现在是空的"在磁盘上长得一模一样。
-    # 工作台那条边界早有同一条判据（tests/test_workbench_ui.py：缺库不许被创建），
+    # 工作台那条边界早有同一条判据（tests/test_app_one_page.py：缺库不许被创建），
     # CLI 这一侧以前没有。
     banner = queue_banner(config_dir, config.settings.scheduler.db_path)
     print(banner)

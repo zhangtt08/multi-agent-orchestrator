@@ -50,8 +50,13 @@ class AgentSessionManager:
         *,
         session_id: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
+        provider_issued: bool = False,
     ) -> AgentSession:
-        """取出或创建会话。若外部带回了新的 session_id，则以外部为准。"""
+        """取出或创建会话。若外部带回了新的 session_id，则以外部为准。
+
+        `provider_issued` 决定这个 id **能不能被传回 CLI**：False 时它只是框架内部的
+        记账号（Mock 与观测用），拿来续接真实产品就是把编造的 id 塞给人家。
+        """
         existing = self.get(task_id, role)
         if existing is None:
             session = AgentSession(
@@ -61,11 +66,13 @@ class AgentSessionManager:
             )
             if session_id:
                 session.session_id = str(session_id)
+                session.provider_issued = bool(provider_issued)
             self._sessions[self.key(task_id, role)] = session
             return session
 
         if session_id and str(session_id) != existing.session_id:
             existing.session_id = str(session_id)
+            existing.provider_issued = bool(provider_issued)
         if metadata:
             existing.metadata.update(metadata)
         existing.touch()
@@ -131,6 +138,10 @@ class SessionResumePlanner:
         if session is None:
             return None
         if previous_round <= 0:
+            return None
+        if not getattr(session, "provider_issued", False):
+            # 合成 id 不许外传：把它发给真实 CLI 就是"以为在续，其实在开新会话"
+            # （或者像 OpenCode 那样直接拒）。
             return None
         return session.session_id
 

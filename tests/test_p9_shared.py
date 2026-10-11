@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import threading
 import time
 from pathlib import Path
@@ -153,6 +154,12 @@ class TestProtocolSafety:
 # §38/§91：FAISS 并发 guard
 # ===========================================================================
 class TestFaissGuard:
+    # 这一格测的是 FAISS backend 的并发 guard。`requirements-semantic.txt` 顶部
+    # 明写"不装这一份也能跑"（检索退化成 FTS5 词法），所以本机没装 numpy/faiss-cpu
+    # 时它是**不适用**，不是失败 —— 判据没被放宽：装了那两份的机器上照旧真跑。
+    @pytest.mark.skipif(
+        not all(importlib.util.find_spec(m) for m in ("numpy", "faiss")),
+        reason="没装可选的语义档依赖（numpy / faiss-cpu）")
     def test_search_and_upsert_concurrently_safe(self, tmp_path):
         """§91：一线程 search，另一线程 upsert —— 无异常无损坏。"""
         index = ConcurrencyGuardedVectorIndex(

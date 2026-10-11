@@ -26,6 +26,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+import os
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Protocol, runtime_checkable
 
@@ -506,7 +507,8 @@ class Orchestrator:
         # 注入文本自带 "advisory, current task takes precedence" 头，
         # 优先级低于 System Policy / Execution Policy / Current Task（§19）。
         # 全程可失败（§35）：Memory 出错只 WARNING，任务照常。
-        memory_ids = self._inject_memory(role, prompt_vars, call_id)
+        memory_ids = self._inject_memory(role, prompt_vars, call_id,
+                                     current_prompt=prompt)
         if memory_ids:
             prompt = prompt + self._memory_section
 
@@ -558,6 +560,24 @@ class Orchestrator:
         )
         _logger.debug("invoke role=%s provider=%s call_id=%s prompt_chars=%d",
                       role.value, binding.provider, call_id, len(prompt))
+
+        # 提示词默认**不落盘**（里面有业务原文与本机路径）；业主提过要求"看得见发过去
+        # 的是什么"，所以给一个显式开关：`.env` 里 `MAO_LOG_PROMPT=1` 才写，
+        # 写在任务目录里（那里本来就是运行现场，且 gitignored）。不开时这条路径不存在，
+        # `test_prompt_is_never_recorded` 那条判据照旧成立。
+        if str(os.environ.get("MAO_LOG_PROMPT") or "").strip().lower() in (
+                "1", "true", "yes", "on") and self.store is not None:
+            try:
+                dump = Path(self.store.dir) / f"prompt-{call_id}.md"
+                dump.write_text(
+                    f"<!-- role={role.value} provider={binding.provider} "
+                    f"call_id={call_id} chars={len(prompt)} -->\n"
+                    f"== system_prompt ==\n{system_prompt or ''}\n"
+                    f"== prompt ==\n{prompt}\n",
+                    encoding="utf-8", newline="\n")
+                self._last_prompt_path = str(dump)
+            except OSError as exc:      # 写不进去不影响跑，只是那一格少一份原文
+                _logger.warning("prompt dump failed: %s", exc)
 
         # 容量闸门（§24/§28）：provider_key = 配置身份（harness profile 名，
         # 如 codex_supervisor / real_executor；mock 回退 provider 名）。
@@ -1082,7 +1102,8 @@ class Orchestrator:
             return 3
 
     def _inject_memory(self, role: Role, prompt_vars: Dict[str, Any],
-                       call_id: str) -> List[str]:
+                       call_id: str, *,
+                       current_prompt: str = "") -> List[str]:
         """检索 + 抑制判定 + Usage 记录 + 注入（阶段七 §4/§16/§20）。
 
         返回实际注入的 memory_ids（§20 溯源）。全程可失败（§35）。
@@ -1108,7 +1129,7 @@ class Orchestrator:
 
             detector = ConflictDetector()
             constraints = list(self.task.constraints) if self.task else []
-            injected_hits: List[Any] = []
+            pending: List[Any] = []
             rank = 0
             for hit in hits:
                 rank += 1
@@ -1145,19 +1166,35 @@ class Orchestrator:
                                        "memory_id": usage.memory_id,
                                        "reason": usage.suppression_reason})
                     continue
+                pending.append((hit, usage))
+
+            # 只渲染未抑制的 hits（§16）。render_details 返回的是**真正出现在
+            # 段里**的那一份 —— 重述本轮简报的条目与超出注入预算的条目都不在里面。
+            pending_ids = {u.memory_id for _, u in pending}
+            section = ""
+            ids: List[str] = []
+            if pending:
+                section, ids = layer.injector.render_details(
+                    [h for h, _ in pending], current_prompt=current_prompt)
+            dropped = sorted(pending_ids - set(ids))
+            for hit, usage in pending:
+                if usage.memory_id in dropped:
+                    usage.injected = False
+                    usage.suppression_reason = (
+                        "not injected: restates the current brief or exceeds "
+                        "the injection budget")
                 layer.store.add_usage(usage)
                 self._log(EventType.MEMORY_USAGE_RECORDED,
                           f"usage recorded: {usage.memory_id} ({role.value},"
-                          f" rank {rank})",
+                          f" rank {usage.retrieval_rank},"
+                          f" injected={usage.injected})",
                           payload={"usage_id": usage.usage_id,
                                    "memory_id": usage.memory_id,
-                                   "call_id": call_id, "rank": rank})
-                injected_hits.append(hit)
+                                   "call_id": call_id,
+                                   "rank": usage.retrieval_rank,
+                                   "injected": usage.injected})
 
-            # 只渲染未抑制的 hits（§16）
-            if injected_hits:
-                section = layer.injector.render(injected_hits)
-                ids = [h.entry.memory_id for h in injected_hits]
+            if ids:
                 self._memory_section = section
                 self._memory_ids_used.setdefault(role.value, []).extend(ids)
                 self._log(
@@ -1167,6 +1204,8 @@ class Orchestrator:
                     provider=self._provider(role),
                     payload={"memory_ids": ids, "top_k": self._memory_topk(role),
                              "mode": mode,
+                             "not_injected": dropped,
+                             "injected_chars": len(section),
                              "retrieval_details": [details_by_id[i] for i in ids
                                                    if i in details_by_id]},
                 )
@@ -1837,7 +1876,12 @@ class Orchestrator:
                     ev.source_snapshots),
                 "git_diff": (ev.git_diff or "(absent)")[:4000],
                 # ---- 第二阶段新增上下文 ----
-                "plan": (plan.model_dump_json(indent=2)[:3000] if plan else "(absent)"),
+                # 方案（plan）**不进 Reviewer 的提示词**：prompts/reviewer/*.md 里
+                # 没有 {plan} 这个占位，以前这里每次仍然把整个 plan 序列化成
+                # indent JSON（每里程碑约 11 KB 的计算量）再丢掉 —— 那句话
+                # "Reviewer 拿到方案与历史"讲的是下面 payload 里的那一份
+                # （进调用档案，供人事后核对），不是模型看到的那一份。
+                # Reviewer 判的是证据与验收标准（§16），方案不参与。
                 "previous_reviews": prior_text,
                 "workspace": self.workspace_path or "(unset)",
             },
@@ -1845,7 +1889,8 @@ class Orchestrator:
                 "execution": execution.model_dump(mode="json"),
                 "acceptance_criteria": [c.model_dump(mode="json") for c in criteria],
                 "context": dict(self.task.context),
-                # Reviewer 拿到方案与历史，才能判断"是不是真的做完了"
+                # 方案与历史进**调用档案**（人事后查这一次调用手上有什么），
+                # 不进 Reviewer 的提示词 —— 见上面 prompt_vars 的说明。
                 "plan": plan.model_dump(mode="json") if plan else None,
                 "previous_reviews": [r.model_dump(mode="json") for r in previous_reviews],
                 "round": self.state.current_round,

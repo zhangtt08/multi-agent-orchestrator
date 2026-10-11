@@ -707,6 +707,10 @@ class AgentSession(_StrictModel):
     """
 
     session_id: str = Field(default_factory=lambda: new_id("sess"))
+    # 这一位是 2026-10-08 实测加上的：框架曾经把自己的 `sess_...` 合成 id 当成
+    # provider 的会话 id 传回 CLI（OpenCode 直接拒 `at ["sessionID"]`），
+    # 于是"同一个对话"是个假保证。**只有 provider 自己给过的 id 才能用来续接。**
+    provider_issued: bool = False
     provider: str
     role: Role
     created_at: datetime = Field(default_factory=utcnow)

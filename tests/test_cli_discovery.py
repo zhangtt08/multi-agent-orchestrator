@@ -299,6 +299,32 @@ def _probe_dir(tmp_path, monkeypatch):
 
 
 class TestFrameworkCommandEnv:
+    def test_a_relocated_full_interpreter_still_finds_its_scripts_dir(
+            self, tmp_path, monkeypatch):
+        """桌面版交付用的正是这一种布局：`runtime\\python.exe` + `runtime\\Scripts\\`。
+
+        只回 `Path(sys.executable).parent` 时给的是前缀本身，那里没有 pytest.exe ——
+        被切出来的验收命令于是又记成"没跑成"（地雷 51 的同一症状，换个现场）。
+        把实现改回那一行，这一条必红。
+        """
+        prefix = tmp_path / "runtime"
+        scripts = prefix / "Scripts"
+        scripts.mkdir(parents=True)
+        (prefix / "python.exe").write_bytes(b"")
+        (scripts / "pytest.exe").write_bytes(b"")
+        monkeypatch.setattr(sys, "executable", str(prefix / "python.exe"))
+        got = ex.interpreter_scripts_dir()
+        assert got == str(scripts), f"该指向 {scripts}，实际给的是 {got}"
+
+    def test_an_activated_venv_layout_still_returns_the_venv_scripts_dir(
+            self, tmp_path, monkeypatch):
+        """改上一条时不许把这一档一起改掉：venv 的 parent 本来就是 Scripts。"""
+        scripts = tmp_path / ".venv" / "Scripts"
+        scripts.mkdir(parents=True)
+        (scripts / "python.exe").write_bytes(b"")
+        monkeypatch.setattr(sys, "executable", str(scripts / "python.exe"))
+        assert ex.interpreter_scripts_dir() == str(scripts)
+
     def test_the_interpreter_own_dir_is_prepared_exactly_once(self, monkeypatch):
         monkeypatch.setenv("MAO_PROBE_VAR", "keep-me")
         env = ex.framework_command_env()

@@ -1,0 +1,15 @@
+{
+  "name": "mao-desktop",
+  "private": true,
+  "version": "1.9.17",
+  "description": "MAO 工作台的 Tauri 桌面外壳（真正的判据在 tools/app.py 那一侧）",
+  "scripts": {
+    "tauri": "tauri",
+    "icon": "cd src-tauri && tauri icon ../icon.png",
+    "dev": "tauri dev",
+    "build": "tauri build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}

@@ -327,6 +327,47 @@ class GenericCLIAdapter(AgentAdapter):
     # ------------------------------------------------------------------
     # 主流程
     # ------------------------------------------------------------------
+    def _provider_session_id(self, profile, invocation, process_result):
+        """只取 **provider 自己给出来的**会话 id，取不到就返回 None。
+
+        为什么单独一个方法：框架曾经把内部记账用的合成 id（`sess_...`）当 provider 的
+        会话 id 传回 CLI —— 真实产品要么拒收（OpenCode：`at ["sessionID"]`），要么
+        静默新建一个会话，于是"同一个对话"变成一个假保证。两条合法来源，都由 Profile
+        配置决定，不在这里认品牌：
+          · `session_id_pattern` 直接在本次输出里找（`--format json` 一类）；
+          · `session_lookup_args` 再问一次 CLI 自己（`session list` 一类，不调用模型）。
+        """
+        import re as _re
+
+        pattern = getattr(profile, "session_id_pattern", None)
+        lookup = [str(a) for a in (getattr(profile, "session_lookup_args", None) or [])]
+        if not pattern and not lookup:
+            return None
+        rx = None
+        if pattern:
+            try:
+                rx = _re.compile(str(pattern))
+            except _re.error:
+                return None
+        text = ""
+        if lookup:
+            from mao.transports.process import run_once
+
+            argv = [str(invocation.argv[0]), *lookup] if invocation.argv else []
+            if not argv:
+                return None
+            res = run_once(argv, cwd=invocation.cwd, timeout=30.0)
+            text = str(res.stdout or "") + chr(10) + str(res.stderr or "")
+        else:
+            text = (str(process_result.stdout or "") + chr(10)
+                    + str(process_result.stderr or ""))
+        if rx is None:
+            return None
+        found = rx.search(text)
+        if not found:
+            return None
+        return found.group(1) if found.groups() else found.group(0)
+
     def _compose_request_prompt(self, request: AgentRequest,
                                 profile: HarnessProfile) -> AgentRequest:
         """把 system prompt 按 Profile 能力组合进请求（§16）。
@@ -372,9 +413,14 @@ class GenericCLIAdapter(AgentAdapter):
             )
 
         # 2) 会话：只有 Profile 声明支持、且配置了参数名时才 resume
+        # 带进来的 id 只有在"这一档知道自己怎么取回 id"时才算 provider 发过的；
+        # 否则它可能是上一版框架合成的假 id，宁可不续接。
+        can_capture = bool(getattr(profile, "session_id_pattern", None)) or bool(
+            getattr(profile, "session_lookup_args", None))
         session = self.session_manager.get_or_create(
             request.task_id, request.role, profile.name,
             session_id=request.session_id,
+            provider_issued=bool(request.session_id) and can_capture,
         )
         resume_id = self.resume_planner.plan(
             profile_resume_supported=profile.supports_session_resume,
@@ -410,7 +456,13 @@ class GenericCLIAdapter(AgentAdapter):
         process_result = self._invoke_transport(transport, invocation, call_id)
 
         # 6) 原始层 -> dict
-        raw = self.parser.to_raw(process_result, session_id=session.session_id)
+        provider_sid = self._provider_session_id(profile, invocation, process_result)
+        if provider_sid:
+            session = self.session_manager.get_or_create(
+                request.task_id, request.role, profile.name,
+                session_id=provider_sid, provider_issued=True,
+            )
+        raw = self.parser.to_raw(process_result, session_id=provider_sid)
         raw.metadata.setdefault("command_display", invocation.command_display)
         raw.metadata.setdefault("working_directory", invocation.cwd)
 
@@ -428,7 +480,7 @@ class GenericCLIAdapter(AgentAdapter):
                 ok=False,
                 data={},
                 raw=process_result.stdout,
-                session_id=session.session_id,
+                session_id=provider_sid,
                 provider=profile.name,
                 duration_ms=process_result.duration_ms,
                 transport=getattr(transport, "name", None),
@@ -461,7 +513,7 @@ class GenericCLIAdapter(AgentAdapter):
                 ok=False,
                 data={},
                 raw=process_result.stdout,
-                session_id=session.session_id,
+                session_id=provider_sid,
                 provider=profile.name,
                 duration_ms=process_result.duration_ms,
                 transport=getattr(transport, "name", None),
@@ -500,7 +552,7 @@ class GenericCLIAdapter(AgentAdapter):
                 ok=False,
                 data={},
                 raw=process_result.stdout,
-                session_id=session.session_id,
+                session_id=provider_sid,
                 provider=profile.name,
                 duration_ms=process_result.duration_ms,
                 transport=getattr(transport, "name", None),
@@ -527,7 +579,7 @@ class GenericCLIAdapter(AgentAdapter):
             ok=True,
             data=payload,
             raw=process_result.stdout,
-            session_id=session.session_id,
+            session_id=provider_sid,
             provider=profile.name,
             duration_ms=process_result.duration_ms,
             transport=getattr(transport, "name", None),

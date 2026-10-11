@@ -276,6 +276,54 @@ def uses_real_cli(config: Any) -> bool:
     return False
 
 
+def collect_census(report: EnvReport, config: Any) -> None:
+    """本机普查那一格 —— doctor 与网页读的是同一份（`tools/cli_census`）。
+
+    为什么要进 doctor：业主的机器可能装着 ZCode / CodeBuddy / OpenCode，或 cc-switch
+    管着 10 种 app，而命令行那句只报"codex 与 claude 都能用"。同源规矩见
+    `tools/bootstrap.py` 顶上那段：同一件事在两个地方各给一个答案，比查不出来更糟。
+    这一格**不参与能不能跑**：它只说本机还装了哪些、MAO 能驱动哪几个。
+    """
+    try:
+        from tools import agent_probe, cli_census
+    except Exception:                                    # noqa: BLE001
+        return
+    try:
+        data = cli_census.census()
+    except Exception as exc:                             # noqa: BLE001
+        report.add("CLI Harnesses", WARN, "agent census",
+                   f"普查读不动：{type(exc).__name__}: {_friendly(str(exc))[:140]}",
+                   "这一格不影响能不能跑：它只说本机还装了哪些 agent CLI")
+        return
+    try:
+        reg = config.profile_registry()
+        facts = [agent_probe.profile_facts(n, reg) for n in reg.names()]
+    except Exception:                                    # noqa: BLE001
+        facts = []
+    found = [r for r in data["rows"] if r["found"]]
+    bound = cli_census.bindable_profiles(found, facts)
+    undriven = sorted(r["key"] for r in found
+                      if r["kind"] == "cli" and r["key"] not in bound)
+    apps = sorted(str(r["cn"]) for r in found if r["kind"] == "app")
+    bits = [f"能驱动：{'、'.join(sorted(bound)) or '没有'}"]
+    if undriven:
+        bits.append(f"检测到但没实测过驱动方式：{'、'.join(undriven)}")
+    if apps:
+        bits.append(f"只有 app/数据目录、没有命令行入口：{'、'.join(apps)}")
+    currents = {k: v for k, v in (data.get("switch_currents") or {}).items() if v}
+    if currents:
+        bits.append("cc-switch 现在：" + "、".join(f"{k}={v}" for k, v in sorted(currents.items())))
+    detail = "；".join(bits)
+    if undriven or apps:
+        report.add("CLI Harnesses", WARN, "agent census", detail,
+                   "要让检测到的那一个能被驱动：在 config/harness.yaml 里给它加一档"
+                   "（命令、参数、prompt 投喂方式），并实测过它非交互跑得起来 —— "
+                   "按没实测过的参数起一次就是一次白烧的额度，所以页面对没档的不给按钮")
+    else:
+        report.add("CLI Harnesses", OK, "agent census", detail,
+                   "换档在第一页那一格里选，不用编辑 config/agents.yaml")
+
+
 def collect_harness(report: EnvReport, config: Any) -> None:
     """复用 Orchestrator 的 preflight —— 与实跑同一个判据，不另写一套。"""
     try:
@@ -365,6 +413,7 @@ def collect_harness(report: EnvReport, config: Any) -> None:
                            "这些 CLI 没有本地状态子命令，只能由一次成功的真实"
                            "调用证明：python tools/smoke_real_harness.py "
                            "--dry-run 看命令，加 --yes 才真跑（消耗配额）")
+    collect_census(report, config)
     if not uses_real_cli(config):
         report.add("CLI Harnesses", OK, "harness",
                    "这份配置全是 Mock provider：不需要真实 CLI，零配额消耗")

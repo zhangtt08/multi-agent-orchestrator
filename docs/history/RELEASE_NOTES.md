@@ -1141,3 +1141,56 @@ Reviewer 判 PASS。然后闸门仍然拒绝合入，理由是：
 `tools/unattended_e2e.py --one` 五判据仍 PASS，146 条相关测试绿。
 
 业主那句话的交付还差最后一步：**再真跑一次**看闸门放行。这一步花额度，没有再擅自花。
+
+---
+
+# 一页版（2026-10-08，业主第十轮破冻结）
+
+```text
+要求   "界面不光是用户，我自己也看不懂如何执行……必须优化到无可优化为止；
+        核心目标：好上手，能执行项目需求即可。做好后精简文件夹即可交付。"
+做的   删界面，不删判据。入口只有一个：tools/app.py（双击 开始使用.bat）
+没做   版本没升（VERSION 仍 1.9.17，没 git 也没标签）、没 push、没花真实额度
+```
+
+## 界面上删掉了什么
+
+| 旧 | 现 |
+|---|---|
+| 7 个导航页（任务/仪表盘/工作流/角色/记忆/工作区/配置）+ `/classic` + `/run/<rt>` | 一页，五格：说一句话 / 调用哪个 agent / 现在到哪了 / 中途改需求 / 交付结果 |
+| 三个提交入口（`/submit` 单任务、`/plan` 只切分、`/go` 一句话） | 只有 `开工`（`/go`）；没开工时不显示"中途改需求"和"交付结果"那两格 |
+| 三个改方向入口（`/steer` 单条、`/steer` 批次、`/batch-steer`） | 一个输入框（批次 + 当前运行两层一次写全，`steer_batch`） |
+| 停下来的那一格只给一句 `run --retry` 命令 | 给「再跑这一格」按钮；真实档第一下只说明代价，确认那一下才真的再调用 |
+| 落地目录要人自己想 | 默认 `桌面\MAO-交付\<日期-时分>-<名字>`，不存在会建好并 `git init`；可以改 |
+| `tools/workbench_ui.py`(1769) + `workbench_flow.py`(408) + `workbench.py` 的 HTTP/渲染层(977 行) | 退役，副本在 `archive/old-ui/`；新页面 888 行。`workbench.py` 只剩判据函数（690 行） |
+| `tools/` 40 个脚本 | 27 个；9 个只被历史报告引用的旧 phase demo 移进 `archive/old-demos/` |
+| `.venv`(153MB，跳板已死) + `.venv-ml` + `.venv-old-machine`（两个 site-packages 是空的） | 删除；`第一次装这个.bat` 现场重建。仓库体积 172MB → 55MB（其中 39MB 是验证用的 .venv3，交付时可删） |
+
+## 这一轮抓到并修掉的形状问题
+
+1. **`load_config` 按进程 cwd 解析**（地雷 36 的同一条）：从别的目录双击启动时读不到 `config/`，
+   于是 `tools/app.py` 起手 `os.chdir(ROOT)` —— 判据不在"仓库里能起"，在"从陌生 cwd 能起"。
+2. **只读层不能吞异常**：`queue_rows` 一开始传错参数（把配置目录当已加载配置传给
+   `build_repo_from_config`），异常被 `except: return {}` 吃掉，页面于是说"这一格没有记录"。
+   现在读 `delivery_view.queue_rows/snapshot`，查不到就**报出在读哪个库**；
+   项目档读不动时页面说"这一批现在开不了 + 原因"，不许说成"还没开始过"（地雷 44）。
+3. **来源守卫必须跟着入口走**：甲方验收 2026-10-05 第 1 条 BLOCKER（Host 要等于**真的绑上**的
+   回环端口；跨站表单 403；超大 body 413；坏 Content-Length 得回话不能掐连接）
+   整组搬到手艺面 `tools/app.py`，`tests/test_workbench_local_guard.py` 现在打的是这一页。
+   413 那一条要先**丢掉**多余的字节再回话，否则 Windows 上客户端拿到 10053 而不是那句回话。
+4. **`{goal}` 被当成字面量打印**：f-string 前缀只加在第一行，隐式拼接的第二行不参与插值 ——
+   页面上真的出现过 `{goal}`。回归是"落地页 textarea 里有回显的那句话"。
+
+## 验证到什么程度
+
+- `tools/unattended_e2e.py --panel` **7 条判据全绿**（零配额：本机假 agent，真的切分、真的跑、
+  真的合入、真的写 DELIVERY.md）。最后一条现在打的是**这一页**：`执行 agent 干活 ×N` 与
+  `验收 agent 拆目标 ×N` 要在页面上露面，数字来源是框架自己的 `agent_calls.jsonl`。
+- 新的一页守卫：`tests/test_app_one_page.py` 20 条（不编造数字、渲染前后状态文件字节相同、
+  缺库不许被创建、`running` 必须是方法、跨文件引用守卫 app→workbench、POST 每个分支都留话、
+  跨站被拒、404 也把人放回打字那一格、没开工时不多出两格）。
+- 本机事实核对：Codex CLI **已装并已登录**（`%LOCALAPPDATA%\OpenAI\Codex\bin\<hash>\codex.exe`，
+  `codex login status` = `Logged in using ChatGPT`），Claude Code 2.1.284 也在。
+  页面第一屏那一格现在写的是"可用"，不是推测。
+- **没做**：真实额度的一整跑（要花钱，等业主自己按『开工』）；`release_check.py` 的 11 步电池
+  需要 git，这台机器上这个文件夹没有 `.git`（第 46 条地雷说的搬运现场）。

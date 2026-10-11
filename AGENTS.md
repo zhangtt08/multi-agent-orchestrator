@@ -1,6 +1,6 @@
 # AGENTS.md —— 给接手这个仓库的 agent
 
-Multi-Agent Orchestrator v1.9.17。产品能力处于**冻结**状态，但这一版冻结**已经被用户当面破过九轮**
+Multi-Agent Orchestrator v1.9.17。产品能力处于**冻结**状态，但这一版冻结**已经被用户当面破过十轮**
 （v1.1.x 输入面 `tools/workbench.py` → v1.2/v1.3 批次层与 `accept`/`demo` → v1.4 前端外壳 →
 v1.5 `recheck`/`--retry` → v1.6 `plan`、demo 预览图、验收基线与冲突上报 →
 v1.7 一句话输入面（自动切分并开工）、凭据与角色换档、桌面版封装 →
@@ -8,7 +8,9 @@ v1.8 无人值守交付（`mode: auto` + 证据闸门 + `drive`/`ship` + `DELIVE
 中途改方向（`queue steer` 与 `task_directives`）、两个 agent 的工作流页 `/ui/flow/<rt-id>` →
 v1.9 把"下一步"从人的终端里搬回来：`建仓库并开工`、CLI 登录态本地探测、
 短句不再被拒、中文文件名不再被当成"不是命令"、免费那一档改演**同一条交付路径**
-（`--rehearsal` 彩排档）、崩溃后接管（地雷 42）。见地雷 35、40、41、42）。
+（`--rehearsal` 彩排档）、崩溃后接管（地雷 42）、收成唯一一屏（`tools/app.py`）+
+Tauri 桌面外壳（`desktop/`）、**换档与自备端点回到页面上**（地雷 52）。
+见地雷 35、40、41、42、52）。
 每一次都是用户提需求破的，不是有人顺手加的 —— 对外定义仍以 README「已知边界」与
 RELEASE_NOTES 的清单为准。要扩展能力，先解冻、再动手。
 
@@ -16,6 +18,22 @@ RELEASE_NOTES 的清单为准。要扩展能力，先解冻、再动手。
 分层与数据协议交给 `docs/ARCHITECTURE.md`。
 
 ## 起手
+
+**界面只有一页**（2026-10-08，业主第十次破冻结，原话"不光是用户，我自己也看不懂如何执行"）：
+
+| 东西 | 现在在哪 | 说明 |
+|---|---|---|
+| 唯一的网页入口 | `tools/app.py`（双击 `开始使用.bat`） | 一屏五格：说一句话 / 调用哪个 agent / 现在到哪了 / 中途改需求 / 交付结果。没有导航、没有仪表盘、没有第二条提交入口 |
+| 双击外壳 | `tools/entry_batches.py` **生成** `/第一次装这个.bat`、`/开始使用.bat`、`/不花钱先看一遍.bat` | 外壳是生成物、被 .gitignore 排除：cmd.exe 要 CRLF+GBK，而本仓库的行尾策略是 `eol=lf`，那条 `w/crlf` 守卫会正面冲突（地雷 27 的同一条规矩 —— **别手改 .bat，改脚本**；`--check` 会告诉你它们是否漂移） |
+| 判据层 | `tools/workbench.py` | 它自己的 HTTP 与全部 `render_*` 已删；剩下的只有切分前提（`repo_problem`/`init_repo_here`/`login_blocker`）、推进器（`ShipRunner`/`start_ship`）、队列动作（`control_task`/`steer_*`）与来源守卫（`host_problem`/`same_origin`/`MAX_BODY_BYTES`） |
+| 旧的那七页 | `archive/old-ui/`（`workbench.py`、`workbench_ui.py`、`workbench_flow.py` 的副本） | **不可 import**，只作对照。新代码不许引用；要恢复某一面，从副本里读判据、在一页版里重做 |
+| 被替换掉的界面测试 | `archive/old-ui-tests/` | 它们锁的判据搬到了 `tests/test_app_one_page.py`（不编造数字、渲染不动队列库、`running` 是方法、落地页能打字、POST 不逃异常、来源守卫） |
+| 桌面外壳（exe） | `desktop/`（Tauri v2） | 外壳只做"找解释器 → 起 `tools/app.py` → 等端口真的在听 → 开原生窗口 → 关窗收尾子进程"。**任何判据都不许在这里重写第二遍**。两条构建路线都在 `build_shell.ps1` 里（`-Route auto|msvc|gnu`）：有 Windows SDK 走 msvc，没有就走 rustup 自带 mingw 的 gnu（不需要管理员，但要用 `desktop/rc_shim.c` 转发到 `zig rc` 当资源编译器）；两条都不会走时它把要装的命令打出来，而不是让人读链接器报错。**这一层不许有 .cmd 源文件**：cmd.exe 要 CRLF 才可靠解析，而本仓库按 `eol=lf` 存文本且有 w/crlf 守卫 —— 构建逻辑因此写进 PowerShell，仓库里剩下的批处理只有**生成物**（`tools/entry_batches.py` 产的那三个 .bat，CRLF+GBK，.gitignore 排除）。产物用 `desktop/verify_shell.py` 量六条，其中"关掉窗口之后后端必须消失"是地雷 18 那条的机器版 |
+| 交付文件夹 | `desktop/build_portable.ps1` → `dist-desktop\MAO-Workbench\` | `MAO-Workbench.exe` + `runtime\`（**可移植的整份解释器**）+ `app\`。**顶层那个双击入口 = 仓库根的 `MAO-Workbench.lnk`**，由同一个脚本生成（`-Shortcut` 只做这一步），指的就是这个文件夹里那个 exe —— exe **不能**单独拷到根：它在 exe 自己那一侧找 `app\` 与 `runtime\`，孤零零一个 exe 开出来的是一句实话的坏页面。`.lnk` 与 `dist-desktop/` 都不进版本库（都是生成物）。为什么不用 PyInstaller 冻结后端：引擎用 `sys.executable` 起真子进程（`main.py scheduler run`、`batch_project.py ship`），冻结后那个 exe 收到的参数是"跑这份 .py"，语义错位。python.org 从 3.13 起不再发布 embeddable 包（3.13.0→3.13.15 逐个 404），所以 runtime 是**拷一份完整安装**（丢掉 site-packages，`ensurepip` 重建） |
+| 交付路径的零配额门禁 | `tools/unattended_e2e.py --panel` | 最后一条判据现在打的是**这一页**：两个 agent 的往返要在页面上露面 |
+
+推论：**新增任何"第二页/第二个入口"都要先问它替谁做了判断**。这一页只替人做动作（建仓库、备落地目录、
+起推进器），不替人做判定（合不合入、经没经过、证据够不够）—— 后者一律由框架采集并原样说出来。
 
 ```powershell
 $env:PYTHONIOENCODING = "utf-8"   # Windows 控制台默认 GBK；不设会看到乱码和被吞的汇总行
@@ -685,6 +703,239 @@ Agent 自述  执行者说它做了什么 —— 只是供述
     所以 `tests/conftest.py::probe_console_script` 拷的是 **base** 解释器
     `sys._base_executable` 并连 `*.dll` 一起带上。
 
+52. **入口被精简掉不等于判据可以没了**（2026-10-08 业主第二次破冻结，原话
+    "当前的 agent 无法选择，应该有可选择的入口…claude code 接的 deepseek 的 api，
+    codex 接的 glm 的 api…更方便快捷的选择哪个为验收，哪个为执行 agent"）。
+    复盘：旧七页里有 `/roles`（换档）与 `/credentials`（.env）两格，"收成一张页"时
+    把它们连**入口**一起删了，而判据层（`tools/role_wiring.py`、`tools/local_env.py`、
+    `mao/harness/profiles.py`）一行没动 —— 于是那两处只剩"你去编辑 config/agents.yaml"
+    这一句人的终端作业，正是地雷 35 反对的形状。现在的形状：『调用哪个 agent』那一格里
+    三个 `<select>` + `POST /agents`，清单只从 `agent_probe.catalog` 出
+    （里面是 `profile_registry()` 与发现层 `resolve_profile_command`，**不在界面按
+    文件名拼一份档清单**），写只走 `role_wiring.set_binding`；`POST /endpoint` 写
+    非凭据变量走 `local_env.set_key`。四条边界都是当轮补上的，别把它们当样式：
+    ① `set_binding` 自己**先写后** `check()`，所以入口层先问 `rw.check()` ——
+    一个不存在的档不许落进 `agents.yaml`（下一次开工在 `load_config` 上炸，而那句
+    回执早已被 303 冲掉）；回归
+    `tests/test_app_one_page.py::TestRolePicker::test_a_profile_that_is_not_in_harness_yaml_never_reaches_the_file`，
+    **已做变异检查**（把 pre-check 换成 `ok, notes = True, []` 它必红）。
+    ② 换档之后要重算"这一档会不会花钱"：`App.refresh_tier()` 问的还是
+    `uses_real_cli` 那一条判据，不在页面发明第二条；否则同一页上既说"真实 agent 会
+    消耗额度"又说"Mock 不花钱"。**已做变异检查**（删掉那次重算，badge 那条必红）。
+    ③ 档需要哪些本机变量 = 它自己写的 `${}`（`mao/harness.profiles.referenced_env_vars`
+    一处），界面不抄第二份清单；`environment` 的值由 `command_builder._expand` 展开，
+    **未设置的展开成空串**，`base_real_cli` 那类现有档因此绝不能顺手加 `${}` —— 空串
+    会把宿主里已有的同名变量擦掉（`process.env.X || 默认` 那一类 CLI 才恰好没事）。
+    新端点因此是**加一档**（`claude_endpoint_executor`），不是改底座。
+    ④ 页面不收凭据：`local_env.looks_secret` 是那条判据的可执行版本，输入框只给
+    非凭据的变量名，凭据那一格显示"未设置/已设置（长度、末四位）"并说清该由谁写进
+    `.env`；`test_api_keys_are_not_offered` 与
+    `test_the_endpoint_cell_offers_the_declared_vars_and_refuses_the_secret` 一起锁
+    （**已做变异检查**：把那条拒收换成 `if False:` 必红）。
+    同一轮量出来的两条硬边界，写在页面上而不是藏起来：
+    **codex 只认 `wire_api="responses"`** —— 本机 0.162.0-alpha.2 与 0.159.2 实测，
+    写成 `chat`/`chat_completions` 一律 `config could not be loaded`，所以 GLM /
+    DeepSeek 常用的 Chat Completions 端点**接不进 codex**（不是参数没找对，是那个 CLI
+    不讲这个协议；`-c 'model_providers.x={…}'` 那条 per-invocation 的路子是真的，
+    但它救不了协议）。**Claude Code 的 `~/.claude/settings.json` 里那个 `env` 块
+    注入顺序在进程环境变量之后**，本机那份就写着 `ANTHROPIC_BASE_URL` —— 它会把本页
+    填的端点顶掉；软件只读它、只报键名（值一眼不看）、不改它，那是人的凭据与历史。
+    `capacity.providers` 的键**不预先加**：`test_capacity_keys_match_the_bound_profiles`
+    要求"绑着的档"与"容量键"一一对应，多一个没绑的键它就红 —— 那条守卫是对的，
+    别为了让新档"看起来配好了"往 settings.yaml 里塞键；缺键这件事由 `check()` 的
+    那句"静默用默认并发"说出来。
+    **同轮清掉的六条既有红**（不是本轮造成的：拿 HEAD 那份 `config/harness.yaml`
+    复跑照样红）：v1.9.18 给政策加了"解释器 + `-c` = 内联代码"这一形状之后，
+    `tests/test_p2_subprocess.py` 里 5 条传输层用例与
+    `test_p2_infrastructure.py::test_policy_wildcard_allowed_commands` 还在用
+    `python -c` 起子进程 —— 被测性质是"stdout/stdin 管道/超时/退出码/复用/前缀放行"，
+    与内联无关，所以换成仓库里已有的 `tests/spawn_probe.py`（脚本文件形状）与
+    `python run.py`，**断言一个字没放宽**；政策的回归本来就另住在
+    `test_policy_execution_boundary.py`。`TestFaissGuard` 在没装
+    `requirements-semantic.txt`（numpy / faiss-cpu）的机器上是**不适用**而不是失败 ——
+    那份依赖的头顶上明写"不装这一份也能跑"。
+
+53. **"可用什么 agent" 是量出来的，不是列出来的**（2026-10-08 业主第三次破冻结，原话
+    "接入 cc switch，把它本来设置好的…识别到；不是 codex 也不是 cc，而是 zcode 的
+    订阅计划怎么办；不能只限定于 claude code 和 codex，应该通过**用户的电脑**来判断"）。
+    形状与之前几轮一样：判据层早就有（发现层认可执行文件、`harness.yaml` 认驱动配方），
+    缺的是**第一屏的可见性与候选面的宽度** —— 页面只认两个名字，用户的机器却有 10 种 app。
+    现在的三份判据，每份只有一处：
+    - `tools/cc_switch.py`：**只读**业主已经配好的那一家（`~/.cc-switch/cc-switch.db`
+      按 `mode=ro&immutable=1` 打开；providers / provider_endpoints / settings.json 的
+      visibleApps）。换端点仍然是 cc-switch 做的事，MAO **不写**它的库，也不写
+      `~/.claude/settings.json` / `~/.codex/config.toml` —— 那份文件的 env 注入顺序在
+      进程环境**之后**，所以 MAO 这一页填的端点会被它顶掉；这一格因此先说
+      "已经识别到 X（端点…），那两格不用再填一遍"。脱敏只有一条判据，就是
+      `local_env.looks_secret`：键名带 KEY/TOKEN/SECRET/AUTH 的值丢掉、只留键名。
+      回归 `tests/test_cc_switch_and_census.py::test_the_secret_value_never_comes_back_out`
+      是密文哨兵（**已做变异检查**：脱敏换成 `if False:` 必红）。
+    - `tools/cli_census.py`：候选 = 发现层已知安装位置里的命令名 ∪ cc-switch 的
+      `app_type` ∪ `visibleApps` 全集；可执行文件一律交给
+      `mao/harness/discovery/executable.py`（**没有第二套路径判据**，地雷 65 那句
+      "新增第二套发现逻辑就是下一个漂移 bug"）。第三类是"装了但没有命令行入口"的
+      app（数据目录探测：本机实测 ZCode / CodeBuddy / WorkBuddy / Cua）—— 这正是
+      "订阅不是 codex 也不是 cc"的那种情形，诚实的回答是**它不能当 agent 用**，
+      除非那个产品给出 CLI，或给出一个 OpenAI / Anthropic 形状的端点可以喂给
+      能驱动的 CLI。普查里不写死"哪几个能驱动"。
+    - **能不能驱动 = 有没有一档**：`bindable_profiles` 按"那一档解析到的 exe 路径
+      相等"判，不按档名里有没有 `codex` 猜。检测到了但没档的，页面上没有按钮，
+      因为按没实测过的参数起一次就是一次白烧的额度。这一条不许用"先给个按钮试试"
+      抹平；要扩的是 `config/harness.yaml` 里那一档（命令、参数、prompt 投喂方式、
+      退出码），且必须实测过。
+    `tools/env_report.py::collect_census` 让 `doctor` 与 `bootstrap` 读同一份 ——
+    命令行与网页给两个答案，比查不出来更糟（`tools/bootstrap.py` 顶上那条同源规矩）。
+    踩过的坑：`os.environ.get("%APPDATA%")` 取的是带百分号的名字，Windows 上变量名
+    不带 —— 于是装了 WorkBuddy/Cua 的机器被报成"没装"。**漏报比报错难发现**，
+    所以普查的沙箱夹具（自造 HOME/APPDATA/LOCALAPPDATA）是必须的。
+    **同轮的另外三件事**：
+    ① 档扩到第三家：`config/harness.yaml` 新增 `opencode_executor` / `gemini_executor`
+    / `qwen_executor`。OpenCode 那一条的调用形状是**本机 `opencode-cli.exe --help`
+    实测**的（v2.0.20：`run` + stdin + `--auto`）；Gemini / Qwen 那两条来自各家官方
+    headless 文档，**本机没实跑过**，所以文件里就写着"没实跑过"这一句，页面上也不
+    把它们说成验证过的。
+    ② **不给那三家编 reviewer/supervisor 档**：它们的文档里没有可证的只读开关
+    （OpenCode 的 `--auto` 是"自动批准未被显式拒绝的权限"，deny 规则住在
+    `opencode.jsonc` 里，不在命令行上）。"验收 agent 不许改文件"这一条没有参数可证
+    时，就不写那一档 —— 回归 `test_harness_ships_profiles_for_more_than_two_clis`
+    把这条边界钉住（有那三家 的 executor 档，且**没有**它们的 supervisor/reviewer 档）。
+    ③ "ZCode 那种订阅怎么办"这一问的诚实答案：ZCode 的公开文档里**没有**非交互
+    prompt 形状（只有 `--web` 起本地服务 + 浏览器），智谱的对第三方端点是 Chat
+    Completions 形状，而 codex 只认 `wire_api="responses"`（地雷 52 那条实测），
+    Claude Code 只讲 Anthropic 形状 —— 所以**现在这条路走不通**，页面上照实说
+    "不是命令行入口 / 端点协议不对"，不给一个必然失败的按钮。可证的替代只有两条：
+    一家讲 OpenAI Responses 的端点配 codex，或一家讲 Anthropic 形状的端点配 Claude Code
+    （后者正是 `claude_endpoint_executor` 与 cc-switch 那格在做的事）。
+    ④ `tools/harness_authoring.py`：检测到了但没档的 CLI，页面上可以**由人填调用契约**
+    加一档（命令 / 非交互参数 / prompt 通道 / 允许退出码，四样缺一就拒着不写），
+    写完用 `load_config` 真加载一遍，不通过就按原字节回滚。MAO 在这里不猜参数 ——
+    猜错的那一次是白烧的额度。`test_a_profile_that_cannot_load_is_rolled_back_byte_for_byte`
+    之外还有一次**真的**回滚被抓到：`block_text` 第一版把 Windows 路径写进 YAML
+    双引号标量，`\U` 被当转义，整份 harness.yaml 判成 cannot parse —— 回滚按原字节
+    恢复，文件里没留半档（同一个坑在我自己的 docstring 里又绊了第二次，见
+    `quote()` 顶上那段）。
+
+54. **"省 token" 不许省掉溯源，也不许省成"送出去没人读"**（2026-10-08 业主第一次
+    要求往体验方向优化，其中一条是"对话调度更省 token"）。
+    先量再改：`MAO_LOG_PROMPT=1` 把每一次真实送出去的 system_prompt+prompt 落到
+    `<attempts>/prompt-<call_id>.md`（默认关 —— 常开就等于把提示词抄进运行目录）。
+    彩排档一整批 9 次调用共 56,020 字，其中**记忆注入段 5,676 字**，全部坐在
+    三次 supervisor 调用里（每次 1,892 字、5 条）。逐条量重合度发现：那 5 条里有
+    3 条是把**本轮简报**整段抄了一遍（`Goal '项目总目标（业主原话）：…' was
+    achieved in 3 round(s)` —— 0.71/0.81/0.73），只有 1 条讲的是别的里程碑。
+    现在的形状（判据只写在 `MemoryInjector.render_details` 一处）：
+    ① 重合度按 **entry.summary** 算，不按整行算 —— 行首 `[MEM-id][kind][scope]` 与
+    行尾 `(source: …)` 是包装，约 55 字，拿它参与比例会把"100% 抄了本轮"的条目
+    压到 0.70，判据该量内容不该量包装（第一版就错在这里，回归把它钉回 1.00）；
+    ② 单行封顶 260、整段封顶 900，**截断保留开头的 `[MEM-id]`**（§20 来源标记不可丢）；
+    ③ `render_details` 返回 `(文本, 真正出现在文本里的 memory_id)` —— 第二个返回值不是
+    装饰：`memory_ids_used` / `MEMORY_INJECTED` / `mark_used` 一律按这一份记。封顶丢掉
+    的条目若仍被记成"注入过"，就是框架记录在说谎，而且它的 `use_count` 会白涨一档、
+    下一轮排序被自己造的假证据抬高（地雷 45 的同一形状）。被丢掉的条目写
+    `usage.injected=False` 并进 `MEMORY_INJECTED.payload["not_injected"]`。
+    实测改后：同一条路再跑一批 51,787 字，记忆段 1,443 字（每次 481 字、1 条）——
+    **一整批省 4,233 字（7.6%），记忆段本身 −74.6%**，而 9 次调用的字数差
+    逐条等于注入段的差（7,335−5,924=1,411），也就是说没有别的东西被顺手改掉。
+    同轮量到的另一条**不是** token 问题而是死代码：`_do_review` 的 prompt_vars 里
+    有 `"plan": plan.model_dump_json(indent=2)[:3000]`，而 `prompts/reviewer/*.md`
+    **从来没有 `{plan}` 这个占位** —— 每个里程碑序列化一次（约 11 KB 计算量）再丢掉，
+    旁边那句注释"Reviewer 拿到方案与历史"讲的是 payload（调用档案）那一份。
+    现在有一条双向守卫 `TestPromptVariableContract`：
+    传了但没被任何模板用上的变量 = 一张**逐条列出的已知债清单**（多一条红、少一条也红 ——
+    少的那一种是"有人把它接进模板了"，那是一次真实的输入面变化，必须当变化对待）；
+    模板里的占位没人传 = 直接红（`str.format_map` 的 `_SafeDict` 会把 `{plan}` 字面量
+    原样留在提示词里，模型读到的是半截 Prompt）。
+    **两条没做的事，理由写在这里而不是藏在 diff 里**：
+    ① 把非执行角色的 `{goal}` 简报削掉"写文件的人才会踩的编码说明"（实测约 2,880 字/格）
+    —— 那条路上有地雷 48 记着的实测（限定词一丢，页面全英文、测试全绿、Reviewer 判 pass），
+    而切分那一腿读的也是同一句；为了 5% 的字数去动拆分输入的形状，是本批最不像赚的一件事，
+    所以不改。② `resume_strategy` 这个字段从第二阶段建模以来**没有任何代码读过**
+    （真正的闸门是 `supports_session_resume` + `resume_argument`），删它要动
+    `phase10_checkpoint_demo` 生成的 YAML 与归档档，属于成品默认变化，不在冻结期内顺手做。
+    回归：`tests/test_p6_memory.py::TestInjectionBudget`（6 条，四条已做变异检查：
+    关掉去重 / 关掉单行封顶 / 关掉整段封顶 / 让 ids 说"kept"而不是"文本里那些"，各红对应那条）、
+    `tests/test_orchestrator.py::TestPromptVariableContract`（3 次变异：把 `plan` 加回去、
+    模板里放一个没人传的占位、悄悄多传一个死变量）。
+
+55. **门禁的容忍必须与被检工具的退出规则同源**（2026-10-08，上一轮我把它标成
+    "解释不了的翻绿"，这一轮它翻红了，于是根因终于被抓到）。
+    形状：`release_check.py` 的 CLI 步给 doctor 算的**期望退出码**写的是
+    "除 `login` 之外有没有 FAIL"，而 `main.py doctor` 自己按"**任何** FAIL 都 1"退出
+    （`tools/bootstrap.py` 同一条规则）。两台机器之间只是 codex 退了登录，
+    期望 0 与实际 1 就分叉，这一步整块转红 —— 一条**本机前提**被报成发布物缺陷。
+    更难查的是它报出来的那一行：`_tail(stderr)` 取最后一行，那里坐着的是
+    `embedding worker 不可用 …` 这句 **WARN**（可选组件缺席，起手那节明说只该 WARN），
+    于是读的人被带去装 torch，而真正的那一格叫 `login`。同一条"允许的 FAIL"的判定
+    在 `check_config` 与 `check_cli` 里还各写了一遍。
+    现在的形状：`LOGIN_ITEM` / `health_failures()` / `blocking_failures()` /
+    `expected_health_rc()` 一处判定，两处消费；期望退出码跟着 doctor 的规则算，
+    非 login 的 FAIL 逐条点名（`group/name: detail`）；红行不再靠 stderr 尾巴，
+    doctor 与 bootstrap 那几条直接打印"体检里 FAIL 的那几格"。
+    另一条同形状的小东西：单文件脚本的 argv 只有一个元素，`label = argv[1:]` 拼出来
+    是**空字符串**，现场是一条"`: 退出码 1，期望 0`" —— 看不出红的是哪一格（地雷 44）。
+    `command_label()` 收这一条，回落 `os.path.basename(argv[0])`。
+    回归 `tests/test_release_cli.py::TestHealthTolerance` 五条（只有 login → 不算缺陷
+    **但**期望退出码仍是 1；别的 FAIL → 点名；`(期望 0 且存在缺陷)` 这一对永不同框）。
+    **已做三次变异检查**：`LOGIN_ITEM` 改成对不上的名字 → 报 `['login','memory db'] == ['memory db']`；
+    `expected_health_rc` 换成 `return 0` → `assert 0 == 1`；去掉 basename 回落 → `assert '' == 'bootstrap.py'`。
+    推论：以后任何"容忍某一条"的门禁，都要写成**被检工具退出码的一个函数**，
+    而不是在门禁侧另算一套 —— 两份规则分叉时，红的那个总是看不出差在哪。
+
+56. **变异-还原会把 `__pycache__` 留在原地，等长变异尤其危险**（2026-10-08 真实误判一次）。
+    这个仓库的规矩是"新断言要当场证它能红"，做法通常是改源文件→跑→还原。坑在还原之后：
+    CPython 的 source-less 校验看的是 **pyc 里记的源文件 mtime+size**，
+    如果变异是**等长**的（把 `[m for m, _ in used]` 换成 `[m for m, _ in kept]`，
+    或把 `固定剧本` 换成 `按你的目标来` —— 汉字等宽），而还原落在**同一秒**里，
+    缓存就被判成有效：文件内容是对的，跑起来的却是变异后的字节码。
+    现场表现是"两条测试在全量跑里红、单独跑也红，可源文件怎么读都是对的"——
+    `inspect.getsource` 读的是文件（linecache），于是它给的绿灯与运行时无关。
+    两条纪律：① 变异脚本自己设 `PYTHONDONTWRITEBYTECODE=1` 再起 pytest；
+    ② 红得不合理解释不掉时，先 `find . -name __pycache__`（避开 `.venv`、`archive`、
+    `dist-desktop`）清掉再看，**别改断言**。
+    同一条坑也适用于 `tools/` 与 `mao/` 里那些被测试直接 import 的文件。
+
+57. **换档那一格的候选面就是业主的选择逻辑 —— 少一档，他就只能绑错**
+    （2026-10-09 第四次破冻结，原话"选择逻辑我也没搞懂，这么多个 agent 该怎么选择，
+    我选择后点击开工依旧执行不了…而不是文字堆叠"）。
+    现场不在仓库里，在**按下去的那一台**：`dist-desktop/MAO-Workbench/app/config/agents.yaml`
+    写着 supervisor/reviewer＝`claude_endpoint_executor`（会改文件的执行档）、
+    executor＝`base_real_cli`（空的共享底座），而 `runtime_batch/` 里连一个状态文件都没有。
+    他为什么这么绑？**因为他没有别的选择** —— Claude Code 在这个仓库里一直只有执行档，
+    只读那一档从来没人写。他机器上装的是 Claude（cc-switch：claude=AICodeMirror），
+    想让三家一致就只能把执行档塞进验收格。**候选面缺档 = 用户绑错 = "开工没动静"**，
+    这三件事是一条链，不是三个 bug。
+    现在的形状（判据每处只有一份）：
+    - `role_wiring.eligibility()`：两条**结构**判据，不看档名猜词 ——
+      ① `supports_file_write` 与角色对不上（干活要能改文件；拆目标/判定只许读）；
+      ② 被别的档 `extends` **且自己没有 `extra_args`**（空壳底座 —— 绑上去等于
+      不带 `-p` 起一个交互式 CLI）。第一版按"是不是底座"一刀切，把刚加的
+      `real_supervisor`/`real_reviewer` 全挡掉了：**自己咬自己**，所以加了"且没参数"。
+      `check()` / `bindable()` / `vendors()` 都问它；界面不再自己拼清单。
+    - `vendors()`：按**解析到的可执行文件名**分组（`vendor_of`），一家管三格；
+      凑不齐的那一家必须自己说出口（OpenCode 只有执行档 → 页面上写"缺拆目标、判定"，
+      radio 置灰）。这是"这么多个 agent 该怎么选"的直接答案：三选一，不是三乘十。
+    - 那一格顶部先说"现在这样开不了工：<原因>"。**没有**在 `start_go` 里加拦截：
+      试过，它会把更具体的既有前提（非 git 目录、未登录）整条盖掉，
+      三条既有用例当场红 —— 判据不能抢更准的那一句。
+    - 回话往前指："'就这么定' 什么都没改"以前写"没改：这三格选中的就是现在绑的那三档"，
+      他刚按完『开工』没动静、这里又说"没改"，读起来像失败。
+    同一条链上量到一条**与绑错无关**的机制（任何用自备端点的人都会撞）：
+    `command_builder._resolve_env` 对 `KEY: "${VAR}"` 在 VAR 没设时展开成**空串并写进环境**，
+    而 `claude` 读 `process.env.ANTHROPIC_BASE_URL || 默认端点` —— 空串算"有值"，
+    于是宿主（cc-switch）配好的端点被 MAO 一句话擦掉，那次调用必废。
+    地雷 52 ③ 早就写着"未设置的展开成空串会擦掉宿主同名变量"，但当时只约束了
+    "别往底座加 `${}`"，**展开这一侧的行为一直没改**。现在：整值就是一个未设置的
+    `${VAR}` → 不写这个键；字面量 `KEY: ""` 照旧清空（那是作者明说要清空）；
+    `base_env` 里有值也算设过。
+    回归：`tests/test_app_one_page.py::TestRolePicker` 新增 5 条 +
+    `tests/test_p2_profiles.py::TestUnsetEndpointDoesNotEraseTheHost` 4 条。
+    三次变异各红对应那条（把 env 的跳过改回去 / 去掉只读规则 / 去掉空壳底座规则）。
+    夹具补 `readonly_profile`：换档那几条测的是**写文件的机制**，不该被新资格判据挡着 ——
+    资格判据有自己的用例；顺手把三条按字面措辞写的断言改到判据上（列头改了字）。
+    **推论**：以后扩 CLI 时，"能不能当某个角色"是 `harness.yaml` 里那一档的**结构事实**
+    （有没有只读开关、有没有参数），不是页面上的文案；缺哪一格的角色档，就先补档，
+    再谈"让他选"。
+
 ## 配额与证据纪律
 
 真实 Agent 调用花订阅额度：`pytest -m real_harness`、
@@ -749,3 +1000,12 @@ Agent 自述  执行者说它做了什么 —— 只是供述
               与测试重写的，行为等价、身份不同），不是原来那台机器上的真历史。
 提交          一个提交一件事；commit message 说为什么和当时的判据，不复述 diff
 ```
+
+<!-- ACB:BEGIN -->
+## ACB 交接：这个项目里可能有做到一半、由别的 Agent 封存的活
+- 接手前**先只读** `.acb/LATEST.md`：它会把你带到当前那一份交接简报。不要重读聊天记录，也不要先整仓扫描。
+- 你做到一半要被换掉（额度、上下文、订阅切换）时：**当场自己封存**，别等人来复制粘贴一段话给你。
+  `.acb/LATEST.md` 里有可直接执行的封存命令；能调 ACB 的 Agent 工具就用 `acb.handoff_create`（要 `confirm:true`，`taskName` 可以留空，ACB 会从分支名、提交标题和 diff 推断）。
+- 封存带走的是**代码现场**（暂存区与工作区两版、删除、改名、符号链接、空目录，逐文件 SHA-256），不是文字描述；文字只是它的一小部分。
+（这一段由 ACB 自动维护。想停用：删掉标记之间的全部内容，再在项目根建一个空文件 `.acb/NO-BRIDGE`，ACB 之后就不会再写这个文件。）
+<!-- ACB:END -->

@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>MAO 工作台</title>
+<style>
+body{font:15px/1.7 "Segoe UI","Microsoft YaHei",sans-serif;margin:0;height:100vh;
+display:flex;align-items:center;justify-content:center;background:#f6f7f9;color:#17181a}
+.card{max-width:560px;padding:26px 28px;background:#fff;border:1px solid #e2e5e9;border-radius:12px}
+h1{font-size:18px;margin:0 0 10px}
+code{background:#f3f4f6;padding:1px 5px;border-radius:4px}
+button{font:15px/1.4 inherit;padding:9px 18px;border-radius:8px;border:1px solid #0b5cad;
+background:#0b5cad;color:#fff;cursor:pointer;margin-top:14px}
+ul{padding-left:20px;margin:8px 0 0}
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>工作台没能连上本机后端</h1>
+  <p>这个窗口是原生外壳（Tauri）。它要做的只有一件事：把本机那一页
+  <code>tools/app.py</code> 显示出来。现在它连不上，所以程序本体那一侧没有回答。</p>
+  <p>请先看日志（就在这一份程序旁边的那一个）：</p>
+  <ul>
+    <li>随包运行：<code>runtime_desktop\desktop.log</code></li>
+    <li>开发运行：<code>desktop\src-tauri\runtime_desktop\desktop.log</code></li>
+  </ul>
+  <p>最常见的三种缺法：</p>
+  <ul>
+    <li><b>没有 Python</b> —— 先双击 <code>第一次装这个.bat</code>（它会建 <code>.venv</code>），
+      或设 <code>MAO_PYTHON</code> 指向 <code>python.exe</code>。</li>
+    <li><b>没有程序本体</b> —— 整个文件夹一起拷；外壳按
+      <code>tools/app.py</code> 在不在来认，不认目录名。也可以设 <code>MAO_APP_DIR</code>。</li>
+    <li><b>页面自己退出了</b> —— 日志里会有那一句原因（缺配置、缺依赖都会写清）。</li>
+  </ul>
+  <button onclick="location.reload()">再试一次</button>
+</div>
+</body>
+</html>

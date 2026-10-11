@@ -1,0 +1,22 @@
+[package]
+name = "mao-desktop"
+version = "1.9.17"
+description = "MAO 工作台 —— 一句话进去，成片出来"
+authors = ["MAO"]
+edition = "2021"
+rust-version = "1.77.2"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+
+[profile.release]
+# fat LTO + 一个 codegen unit 在这台机器上会让链接单独花掉十几分钟，而外壳这个 exe
+# 不需要那点体积收益：先要的是"能在一个会话里构建完、当场跑验证"。
+# 要压体积就把这两行改回 lto = true / codegen-units = 1，构建慢是可接受的代价。
+codegen-units = 16
+lto = "thin"
+opt-level = "s"
+strip = true

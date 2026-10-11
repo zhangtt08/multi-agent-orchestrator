@@ -44,6 +44,8 @@ SUGGESTED: List[Tuple[str, str]] = [
     ("MAO_MAX_AGENT_CALLS", "覆盖每个任务的调用总量上限（整数）"),
     ("MAO_DRY_RUN", "1 = 干跑，不调用真实 CLI"),
     ("MAO_PREFLIGHT", "0 = 跳过跑前环境体检"),
+    ("MAO_LOG_PROMPT", "1 = 把每次发给 agent 的提示词原文写进任务目录（默认不写："
+                       "里面有业务原文与本机路径）。第一页『两边窗口』那格跟着显示全文"),
     ("MAO_RUNTIME_DIR", "覆盖运行数据根目录"),
     ("MAO_HARNESS_FILE", "指定加载哪个 harness 文件"),
 ]
@@ -61,6 +63,16 @@ EXTERNAL_CONSUMED: Dict[str, str] = {
 
 def env_path(root: Path) -> Path:
     return Path(root) / ".env"
+
+
+#: 界面上**不收**的键名。这一条就是"这个软件不存 key"那句承诺的可执行版本：
+#: 收凭据的输入框不进这一页（有一条测试专门锁它），凭据走 CLI 自己的登录态，
+#: 或者由人自己写进这份被 gitignore 的文件。
+SECRET_RE = re.compile(r"KEY|TOKEN|SECRET|PASSWORD|COOKIE|CREDENTIAL|AUTH|SESSION")
+
+
+def looks_secret(key: str) -> bool:
+    return bool(SECRET_RE.search(str(key or "").upper()))
 
 
 def load_local_env(root: Path | str = ".") -> int:

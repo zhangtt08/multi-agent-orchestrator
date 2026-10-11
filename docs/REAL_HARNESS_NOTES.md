@@ -296,3 +296,69 @@ ls ~/.claude/.credentials.json
 ```
 
 > 附录 B 的 `.probe_auth.py` 是一次性探测脚本，不入库；其逻辑已记录在 §3.2。
+
+---
+
+## 5. OpenCode（v2.0.20）—— 第一次被 MAO 真起起来的那次实测（2026-10-08）
+
+现场：沙箱配置 `runtime_opencode_test/config`（验收两个角色用框架自带的 Mock，
+执行角色绑 `opencode_executor`），workspace 是一个新建的 git 仓库，`--strategy DIRECT`。
+
+| 量到的东西 | 结论 |
+|---|---|
+|  argv 与投喂方式 | `opencode-cli.exe run --auto` + prompt 走 stdin —— MAO 这一侧真的起了它：记录里 `harness=opencode_executor`、`transport=subprocess`、`prompt_mode=stdin`、`workspace=C:\Users\EDY\mao-opencode-test\ws` |
+|  用时与退出码 | `duration_ms=104868`、`exit_code=1`、`error_type=AgentExecutionError` |
+|  为什么失败 | OpenCode 自己那句，被框架原样留在记录里（地雷 49）：`> build · exo-free` 重试十一次后 `Error from provider (Console): Upstream request failed: Endpoint is unavailable.` —— 即这台机器上还没有认证过的 integration（`opencode auth list` 回 No authenticated integrations） |
+|  免费那一档要怎么开 | `opencode auth login opencode --method device`（本机实测可用的 method 是 `device` 与 `key`；`openrouter` 只有 `key`；`github-copilot` 只有 `device`）。device 流程会打印一个 8 位码和一个 `opencode.ai/console/device?user_code=…` 的网址，**要人在浏览器里点确认** —— 这一步和 `codex login` 同性质，程序替不了 |
+|  撞到的框架侧约束 | 第一次直接 BLOCKED，理由是 `preflight failed: capabilities: executor: missing supports_structured_output`。三个角色的 adapter 都把 `supports_structured_output` 列为 required（`mao/agents/generic_cli.py`），所以"没实测过它的结构化输出"这种老实声明**过不了门**。处理方式与 codex/claude 那两段 ★ 一致：能力位保持默认 true，但**不用** `--format json`（交回的是信封，框架的抽取器不解），结构化靠 prompt 约束 + 文本抽取。回归：`tests/test_release_boundaries.py::test_every_shipped_profile_declares_structured_output` |
+
+还没证到的部分，说清楚：这一跑证明了 **MAO → OpenCode 这一段接口是通的**（起得来、
+参数被接受、stdin 投喂生效、失败被诚实记录且不伪造成功），**没有**证明 OpenCode 真能
+完成任务 —— 那要等 device 登录之后 `queue retry` 再跑一次，看 `hello.md` 真被写出来、
+`changes.patch` 有内容、Reviewer 的结论与框架采集对得上。
+
+### 5.1 同日几小时后的续测：免费模型能干活；`exo-free` 那条是坏的；只读仍然无解
+
+| 测的东西 | 结果 |
+|---|---|
+| 免登录有没有免费模型 | **有**。`opencode auth list` 仍是 `No authenticated integrations`，而 `opencode models` 直接列出 `opencode/big-pickle`、`opencode/exo-free`、`opencode/ling-3.1-flash-free` 等十余条 —— 这条通道不需要 key |
+| `exo-free` | 坏：`Error from provider (Console): Upstream request failed: Endpoint is unavailable.`，rc=1，重试十一次。（业主同一句话确认："EXO模型有问题换个模型"） |
+| `big-pickle` | **能干活**：`opencode run --auto -m opencode/big-pickle` 写出的 `hello.md` 逐字正确，rc=0 |
+| MAO 那一格（attempt3） | 执行腿真成功：`role=executor exit=0 valid=True duration_ms=87608`；`RESULT.md` 写 `round 1: 执行=success 判定=fail`；workspace 里 `hello.md` 真在那儿。DIRECT 策略的交接物就在工作区内，**没有** `changes.patch` —— 那是 DIRECT 的设计，不是缺陷 |
+| 判 FAILED 的来源 | 不是 OpenCode，也不是框架采集，而是我在沙箱里把 reviewer 绑成了 `mock_supervisor`：它的内置剧本回一句与任务毫不相干的 `ESC navigation still broken`。这正是地雷 16/45 的反面教材 —— 判定腿若是脚本，它说出的"事实"就不是事实 |
+| OpenCode 有没有可证的只读形状 | **没有**，两种都试了都是负结果：① 不加 `--auto` 让它改文件 → 照样改成 `MUTATED`；② 工作区放 `opencode.jsonc` 写 `permission: {edit: deny, write: deny}` 再加 `--auto` → 还是改成 `MUTATED`，日志里看得到它**绕 shell** 做的（`$ printf 'MUTATED' > target.txt && cat target.txt`） |
+
+落到配置上：`opencode_executor` 钉住 `-m opencode/big-pickle`（钉死是因为默认那条
+`exo-free` 今天在这台机器上是坏的，注释写了为什么），而 **`opencode_supervisor` /
+`opencode_reviewer` 仍然不给** —— 上一轮那句"文档里没有等价只读开关"现在有了本机实测支撑。
+要让"判定"这一腿变成真判定，手头只有带真只读沙箱的那一类 CLI（codex 的
+`exec -s read-only`），而那要走业主自己的订阅额度 —— 花钱之前先问。
+
+### 5.2 "执行与验收始终在同一个对话里"——这一条把框架的一个假保证挖出来了
+
+业主提的要求是：执行 agent 与验收 agent 在一次执行过程中要始终在**同一个对话**里。
+量下来的事实分三层：
+
+1. **框架原来给不了这个保证，而且给的是假的。** `AgentSession.session_id` 有默认工厂
+   `new_id("sess")`，`GenericCLIAdapter` 又把这个合成 id 当响应里的 `session_id` 交回去
+   → Orchestrator 把它写进 `state.json` 的 `active_*` → 下一轮再以
+   `--session sess_xxxx` 传回 CLI。OpenCode 对这种 id 的直接反应是
+   `at ["sessionID"]` 报错退出。修完之后（`provider_issued` 一位 + 只认 provider 给过的
+   id），同一格的记录变成 `ses_ee526a0a5ffe…` —— **provider 自己发的 id**，
+   而且新进程里拿它 `--session` 续问"你刚才创建了什么文件"，答的是
+   "创建了 hello.md，内容为一行 hello from opencode"。**跨进程续上是真的续上了。**
+2. **OpenCode 在一个项目里只保留一个会话**（`session list` 只有 1 条，最后更新时间落在
+   判定腿那一下）。也就是说"三腿同一个对话"是它的默认行为 —— 符合要求的字面，
+   但代价要说清：判定腿因此**带着执行过程的整段上下文**，而本项目的设计是
+   "Reviewer 只依据框架采集的证据判定"（判据归属那一节）。这条冲突现在写在这里，
+   要按哪种语义走是产品决定，不是我可以顺手定的。
+3. **取回 id 的两条合法来源**（都在 Profile 里，不认品牌）：
+   `session_id_pattern` 直接在本轮 stdout 里找（`opencode run --format json` 的
+   `"sessionID":"ses_…"` 实测可用），或 `session_lookup_args` 再问一次 CLI
+   （`opencode session list`，不调用模型）。两条都没有 = 这一档不许续接
+   （`SessionResumePlanner` 返回 None）。回归在 `tests/test_session_continuity.py`：
+   合成 id 外传必红、没配置还去续接必红、生产档里 OpenCode 声明了来源必查、
+   codex/claude 那几档**没有**实测过就被打开续接也必红。
+
+顺带一条现场纪律：这一轮在仓库根发现一个 16:48 生成的 `hello.md`（我的测试漏出来的，
+已删）。它指向的还是地雷 19 那个形状 —— workspace 没给对时，DIRECT 就在进程 cwd 里干活。
