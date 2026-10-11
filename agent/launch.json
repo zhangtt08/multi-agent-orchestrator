@@ -1,0 +1,7 @@
+{
+  "command": "C:\\Program Files\\Python312\\python.exe",
+  "args": ["agent/server.py"],
+  "ready_port": 8766,
+  "ready_path": "/api/health",
+  "note": "Multi-Agent Orchestrator (MAO) 多智能体软件工程编排运行时 Agent API 服务，默认端口 8766"
+}
