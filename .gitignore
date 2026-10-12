@@ -105,3 +105,5 @@ launcher.log
 
 .acb/
 
+
+*.exe
